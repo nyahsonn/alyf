@@ -7,8 +7,10 @@ import uuid
 
 from app.core.embeddings import embed_text
 from app.core.config import settings
+from app.extraction.models import Fact
 from app.extraction.service import Candidate, dedupe_candidates, extract_candidates
 from app.ingestion.service import split_into_chunks
+from app.reasoning.service import compose_answer
 
 
 def test_chunker_returns_nothing_for_blank_text():
@@ -145,6 +147,50 @@ def test_dedupe_keeps_distinct_claims():
         ]
     )
     assert len(kept) == 2
+
+
+def _fact(value: str, kind: str = "metric"):
+    # A transient SQLAlchemy instance -- compose_answer only reads attributes.
+    return Fact(label=_summary(value), value=value, kind=kind, confidence=0.6)
+
+
+def test_compose_answer_leads_with_the_finding_not_the_question():
+    # Callers preview an answer by its first line, and the question is already
+    # rendered beside it, so the opening line must carry the answer.
+    answer = compose_answer(
+        "what happened to revenue?",
+        [(_fact("Revenue reached $4.2M this quarter, up 18% from Q2."), 0.15)],
+    )
+    first = answer.splitlines()[0]
+    assert first == "Revenue reached $4.2M this quarter, up 18% from Q2."
+    assert "what happened to revenue?" not in first
+
+
+def test_compose_answer_flattens_newlines_in_values():
+    # Chunking preserves line breaks, so a value can span lines. Previews take
+    # the first line, which would otherwise cut the sentence in half.
+    answer = compose_answer(
+        "how many accounts?",
+        [(_fact("The team closed 27 new\naccounts, the highest count ever."), 0.2)],
+    )
+    assert answer.splitlines()[0] == "The team closed 27 new accounts, the highest count ever."
+
+
+def test_compose_answer_lists_every_match_with_scores():
+    answer = compose_answer(
+        "how did the quarter go?",
+        [
+            (_fact("Revenue reached $4.2M this quarter."), 0.15),
+            (_fact("Churn fell to 1.4% monthly."), 0.11),
+        ],
+    )
+    assert "1. [metric, relevance 0.15] Revenue reached $4.2M this quarter." in answer
+    assert "2. [metric, relevance 0.11] Churn fell to 1.4% monthly." in answer
+
+
+def test_compose_answer_explains_when_nothing_matched():
+    answer = compose_answer("what happened to revenue?", [])
+    assert "No relevant facts were found" in answer
 
 
 def test_embedding_has_configured_width_and_unit_length():

@@ -69,6 +69,19 @@ def _build_summary(document: Document, facts: list[Fact]) -> str:
     )
 
 
+def _answer_preview(answer: str) -> str:
+    """One-line preview of a composed answer.
+
+    `compose_answer` leads with the answer itself, so the first line carries the
+    substance. Blank lines are skipped rather than indexed blindly, so an answer
+    that opens with whitespace still previews as something.
+    """
+    for line in answer.splitlines():
+        if line.strip():
+            return line.strip()
+    return "_no answer recorded_"
+
+
 def _render_markdown(
     document: Document,
     facts: list[Fact],
@@ -109,7 +122,7 @@ def _render_markdown(
     if insights:
         for insight in insights:
             lines.append(f"- **Q:** {insight.question}")
-            lines.append(f"  **A:** {insight.answer.splitlines()[0]}")
+            lines.append(f"  **A:** {_answer_preview(insight.answer)}")
     else:
         lines.append("_No questions asked yet._")
     lines.append("")

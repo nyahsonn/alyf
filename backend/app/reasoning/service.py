@@ -6,6 +6,7 @@ extractive (it quotes the retrieved facts) so the module has no external
 dependency; replace `compose_answer` with an LLM call to make it generative.
 """
 
+import re
 import uuid
 
 from sqlalchemy import select
@@ -15,6 +16,8 @@ from app.core.embeddings import embed_text
 from app.extraction.models import Fact
 from app.reasoning.models import Insight
 from app.reasoning.schemas import AnswerRead, AskRequest, EvidenceItem
+
+_WHITESPACE_RE = re.compile(r"\s+")
 
 
 async def search_facts(
@@ -39,17 +42,42 @@ async def search_facts(
     return [(fact, 1.0 - float(dist)) for fact, dist in result.all()]
 
 
+def _one_line(text: str) -> str:
+    """Flatten text onto a single line.
+
+    Chunking preserves line breaks, so fact values carry newlines. Left in, they
+    break the numbered list below and truncate any caller that previews an answer
+    by its first line.
+    """
+    return _WHITESPACE_RE.sub(" ", text).strip()
+
+
 def compose_answer(question: str, matches: list[tuple[Fact, float]]) -> str:
-    """Build a readable answer from the retrieved facts."""
+    """Build a readable answer from the retrieved facts.
+
+    The opening line is the answer itself -- the best-matching fact. The question
+    is already carried beside the answer everywhere it is rendered
+    (`AnswerRead.question`, `Insight.question`, and the report's own "Q:" line),
+    so leading with a restatement of it left first-line previews saying nothing.
+    """
     if not matches:
         return (
             "No relevant facts were found. Ingest a document and run extraction "
             "on it first, then ask again."
         )
 
-    lines = [f"Question: {question}", "", "Based on the most relevant extracted facts:"]
-    for rank, (fact, score) in enumerate(matches, start=1):
-        lines.append(f"{rank}. [{fact.kind}, relevance {score:.2f}] {fact.label} — {fact.value}")
+    top_fact, _ = matches[0]
+    lines = [_one_line(top_fact.value)]
+
+    if len(matches) > 1:
+        lines.extend(
+            ["", f'Facts retrieved for "{_one_line(question)}", most relevant first:']
+        )
+        for rank, (fact, score) in enumerate(matches, start=1):
+            lines.append(
+                f"{rank}. [{fact.kind}, relevance {score:.2f}] {_one_line(fact.value)}"
+            )
+
     return "\n".join(lines)
 
 
