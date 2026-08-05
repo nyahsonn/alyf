@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.embeddings import embed_text
 from app.extraction.models import Fact
 from app.ingestion import service as ingestion_service
-from app.ingestion.models import Chunk
 
 # "Label: value" lines, e.g. "Revenue: $4.2M". A dash only separates when it is
 # surrounded by whitespace -- otherwise hyphenated prose ("ship self-serve
@@ -29,6 +28,11 @@ _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 _NUMBER_RE = re.compile(r"\d")
 # Shorter fragments are usually headings or list bullets, not claims.
 _MIN_SENTENCE_WORDS = 4
+_WHITESPACE_RE = re.compile(r"\s+")
+# Kinds derived from splitting prose into sentences. These are the ones a chunk
+# boundary can cut in half, leaving a fragment of the claim in each neighbour.
+# "Label: value" attributes are matched per line, so they survive intact.
+_SENTENCE_KINDS = frozenset({"metric", "statement"})
 
 
 @dataclass(frozen=True)
@@ -58,27 +62,37 @@ def extract_candidates(text: str) -> list[Candidate]:
             Candidate(label=label[:200], value=value, kind=kind, confidence=confidence)
         )
 
-    prose_lines: list[str] = []
+    # Prose is gathered into blocks split at headings, rather than one flat run.
+    # A heading is structure, not a claim, and it carries no terminating
+    # punctuation -- left in the stream it would both contribute its own text and
+    # glue itself onto the sentence below, since sentences only break on ".!?".
+    # Ending the block at a heading also stops prose either side of it from
+    # merging when the preceding line happens to lack closing punctuation.
+    prose_blocks: list[list[str]] = [[]]
     for line in text.splitlines():
+        if _HEADING_RE.match(line):
+            prose_blocks.append([])
+            continue
         match = _KEY_VALUE_RE.match(line)
         if match:
             add(match.group(1), match.group(2), "attribute", 0.8)
         else:
-            prose_lines.append(line)
+            prose_blocks[-1].append(line)
 
     # Only the leftover prose is scanned for sentences. A "Label: value" line is
     # already an attribute, and re-scanning it emits the same claim a second time
     # under a different kind -- worse when the line has no closing punctuation,
     # since consecutive lines then merge into one bogus candidate.
-    for sentence in _SENTENCE_RE.split("\n".join(prose_lines)):
-        sentence = sentence.strip()
-        if len(sentence.split()) < _MIN_SENTENCE_WORDS:
-            continue
-        # Sentences containing figures are the ones worth keeping for reporting.
-        if _NUMBER_RE.search(sentence):
-            add(_summarise(sentence), sentence, "metric", 0.6)
-        else:
-            add(_summarise(sentence), sentence, "statement", 0.4)
+    for block in prose_blocks:
+        for sentence in _SENTENCE_RE.split("\n".join(block)):
+            sentence = sentence.strip()
+            if len(sentence.split()) < _MIN_SENTENCE_WORDS:
+                continue
+            # Sentences containing figures are the ones worth keeping for reporting.
+            if _NUMBER_RE.search(sentence):
+                add(_summarise(sentence), sentence, "metric", 0.6)
+            else:
+                add(_summarise(sentence), sentence, "statement", 0.4)
 
     return candidates
 
@@ -87,6 +101,71 @@ def _summarise(sentence: str, max_words: int = 8) -> str:
     words = sentence.split()
     label = " ".join(words[:max_words])
     return label if len(words) <= max_words else f"{label}..."
+
+
+def _normalise(text: str) -> str:
+    """Fold whitespace and case so wrapping differences compare equal.
+
+    Chunks keep their line breaks, so the same sentence can arrive wrapped in two
+    places -- "grew 24%\nquarter over quarter" against "grew 24% quarter over
+    quarter". Without folding, those read as two distinct claims.
+    """
+    return _WHITESPACE_RE.sub(" ", text).strip().lower()
+
+
+def dedupe_candidates(
+    pairs: list[tuple[uuid.UUID, Candidate]],
+) -> list[tuple[uuid.UUID, Candidate]]:
+    """Collapse candidates that repeat a claim already seen in another chunk.
+
+    Chunks overlap by design, so a claim near a boundary is extracted twice. The
+    two copies are rarely identical: the boundary falls mid-sentence, so one side
+    holds a truncated fragment ("Leadership will revisit pricing in November once
+    the") and the other the whole sentence. Comparing exact text keeps both.
+
+    For sentence-derived kinds a candidate whose text is contained in another's is
+    therefore treated as a partial view of the same claim, and the longer text
+    wins -- it carries the complete sentence and the chunk that held all of it.
+    Containment is deliberately not applied to attributes: their values are short
+    ("5", "32"), and a bare number turns up inside unrelated values often enough
+    that it would discard real facts.
+
+    Quadratic in the candidate count, which runs to tens per document.
+    """
+    kept: list[tuple[uuid.UUID, Candidate]] = []
+
+    for chunk_id, candidate in pairs:
+        value = _normalise(candidate.value)
+        if not value:
+            continue
+
+        supersedes: int | None = None
+        duplicate = False
+
+        for index, (_, existing) in enumerate(kept):
+            if existing.kind != candidate.kind:
+                continue
+            other = _normalise(existing.value)
+            if value == other:
+                duplicate = True
+                break
+            if candidate.kind not in _SENTENCE_KINDS:
+                continue
+            if value in other:
+                duplicate = True
+                break
+            if other in value:
+                supersedes = index
+                break
+
+        if duplicate:
+            continue
+        if supersedes is not None:
+            kept[supersedes] = (chunk_id, candidate)
+            continue
+        kept.append((chunk_id, candidate))
+
+    return kept
 
 
 async def extract_document(session: AsyncSession, document_id: uuid.UUID) -> list[Fact]:
@@ -98,16 +177,19 @@ async def extract_document(session: AsyncSession, document_id: uuid.UUID) -> lis
     # Idempotent: a re-run should not double up facts.
     await session.execute(delete(Fact).where(Fact.document_id == document_id))
 
-    facts: list[Fact] = []
-    seen: set[tuple[str, str]] = set()
+    # Extract everything first, then dedupe across the whole document: a claim cut
+    # by a chunk boundary is only recognisable as a duplicate once both halves are
+    # in hand, and the later, more complete copy is the one worth keeping.
+    extracted = [
+        (chunk.id, candidate)
+        for chunk in chunks
+        for candidate in extract_candidates(chunk.content)
+    ]
 
-    for chunk in chunks:
-        for candidate in extract_candidates(chunk.content):
-            key = (candidate.label.lower(), candidate.value.lower())
-            if key in seen:
-                continue  # overlapping chunks produce duplicate candidates
-            seen.add(key)
-            facts.append(_build_fact(document_id, chunk, candidate))
+    facts = [
+        _build_fact(document_id, chunk_id, candidate)
+        for chunk_id, candidate in dedupe_candidates(extracted)
+    ]
 
     for fact in facts:
         session.add(fact)
@@ -122,10 +204,10 @@ async def extract_document(session: AsyncSession, document_id: uuid.UUID) -> lis
     return facts
 
 
-def _build_fact(document_id: uuid.UUID, chunk: Chunk, candidate: Candidate) -> Fact:
+def _build_fact(document_id: uuid.UUID, chunk_id: uuid.UUID, candidate: Candidate) -> Fact:
     return Fact(
         document_id=document_id,
-        chunk_id=chunk.id,
+        chunk_id=chunk_id,
         label=candidate.label,
         value=candidate.value,
         kind=candidate.kind,

@@ -3,9 +3,11 @@
 Run with:  pytest
 """
 
+import uuid
+
 from app.core.embeddings import embed_text
 from app.core.config import settings
-from app.extraction.service import extract_candidates
+from app.extraction.service import Candidate, dedupe_candidates, extract_candidates
 from app.ingestion.service import split_into_chunks
 
 
@@ -50,6 +52,99 @@ def test_extractor_classifies_sentences_with_numbers_as_metrics():
     kinds = {candidate.kind for candidate in extract_candidates(text)}
     assert "metric" in kinds
     assert "statement" in kinds
+
+
+def test_extractor_excludes_heading_text_from_facts():
+    text = "## Highlights\n\nRevenue reached $4.2M this quarter, up 18% from Q2."
+    candidates = extract_candidates(text)
+    assert [candidate.value for candidate in candidates] == [
+        "Revenue reached $4.2M this quarter, up 18% from Q2."
+    ]
+    # The heading must not survive in the label either -- labels are derived
+    # from the sentence, and a report renders them verbatim.
+    assert "Highlights" not in candidates[0].label
+
+
+def test_extractor_does_not_merge_prose_across_a_heading():
+    # The line before the heading has no closing punctuation, so dropping the
+    # heading without ending the block would fuse the two sentences into one.
+    text = "The rollout slipped by 3 weeks\n\n## Risks\n\nHiring is behind plan by 5 roles."
+    values = [candidate.value for candidate in extract_candidates(text)]
+    assert "The rollout slipped by 3 weeks" in values
+    assert "Hiring is behind plan by 5 roles." in values
+    assert not any("Risks" in value for value in values)
+
+
+def test_extractor_ignores_hashes_that_are_not_headings():
+    # A heading needs whitespace after the hashes; "#3" is part of the claim.
+    text = "Support ticket #3 was closed after 2 days."
+    values = [candidate.value for candidate in extract_candidates(text)]
+    assert values == ["Support ticket #3 was closed after 2 days."]
+
+
+def _pair(value: str, kind: str = "metric", chunk_id: uuid.UUID | None = None):
+    return (chunk_id or uuid.uuid4(), Candidate(_summary(value), value, kind, 0.6))
+
+
+def _summary(value: str) -> str:
+    return " ".join(value.split()[:8])
+
+
+def test_dedupe_drops_exact_repeats():
+    value = "Revenue reached $4.2M this quarter, up 18% from Q2."
+    kept = dedupe_candidates([_pair(value), _pair(value)])
+    assert len(kept) == 1
+
+
+def test_dedupe_ignores_wrapping_differences():
+    # Chunks keep line breaks, so the same sentence can wrap in two places.
+    wrapped = "Infrastructure costs grew 24%\nquarter over quarter."
+    flat = "Infrastructure costs grew 24% quarter over quarter."
+    kept = dedupe_candidates([_pair(wrapped), _pair(flat)])
+    assert len(kept) == 1
+
+
+def test_dedupe_drops_fragment_truncated_by_a_chunk_boundary():
+    # The overlap window starts mid-sentence, so chunk 2 holds a suffix of chunk 1.
+    whole = "The team plans to ship self-serve onboarding and fill 3 of 5 open roles."
+    suffix = "plans to ship self-serve onboarding and fill 3 of 5 open roles."
+    kept = dedupe_candidates([_pair(whole), _pair(suffix)])
+    assert [candidate.value for _, candidate in kept] == [whole]
+
+
+def test_dedupe_prefers_the_complete_sentence_over_an_earlier_fragment():
+    # A chunk ending mid-sentence yields a prefix; the next chunk has all of it.
+    prefix = "Leadership will revisit pricing in November once the"
+    whole = "Leadership will revisit pricing in November once the funnel has 4 weeks of data."
+    later_chunk = uuid.uuid4()
+    kept = dedupe_candidates(
+        [_pair(prefix), _pair(whole, chunk_id=later_chunk)]
+    )
+    assert [candidate.value for _, candidate in kept] == [whole]
+    # The surviving fact is attributed to the chunk that held the whole sentence.
+    assert [chunk_id for chunk_id, _ in kept] == [later_chunk]
+
+
+def test_dedupe_keeps_attributes_whose_values_nest():
+    # "5" reads as a substring of "15" but they are different facts, so
+    # containment must not apply to attributes.
+    kept = dedupe_candidates(
+        [
+            (uuid.uuid4(), Candidate("Open roles", "5", "attribute", 0.8)),
+            (uuid.uuid4(), Candidate("Target", "15", "attribute", 0.8)),
+        ]
+    )
+    assert len(kept) == 2
+
+
+def test_dedupe_keeps_distinct_claims():
+    kept = dedupe_candidates(
+        [
+            _pair("Revenue reached $4.2M this quarter, up 18% from Q2."),
+            _pair("Churn fell to 1.4% monthly, down from 2.1%."),
+        ]
+    )
+    assert len(kept) == 2
 
 
 def test_embedding_has_configured_width_and_unit_length():
