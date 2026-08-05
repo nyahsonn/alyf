@@ -1,0 +1,17 @@
+[project]
+name = "alyf-backend"
+version = "0.1.0"
+description = "ALYF backend — modular monolith (ingestion, extraction, reasoning, reports)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

@@ -1,0 +1,43 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: alyf-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-alyf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alyf}
+      POSTGRES_DB: ${POSTGRES_DB:-alyf}
+    ports:
+      # host:container -- change the host port if 5432 is already in use.
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Named volume: your data survives `docker compose down`.
+      - alyf-db-data:/var/lib/postgresql/data
+      # Runs once, only when the volume is empty. Enables the pgvector extension.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-alyf} -d ${POSTGRES_DB:-alyf}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # Optional web UI for browsing the database. Visit http://localhost:8080
+  adminer:
+    image: adminer:5
+    container_name: alyf-adminer
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+      ADMINER_DESIGN: dracula
+
+volumes:
+  alyf-db-data:
