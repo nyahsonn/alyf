@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ALYF — frontend
 
-## Getting Started
+The Next.js UI for ALYF. **See the [root README](../README.md)** for the project
+overview, architecture, and full setup — this file covers only what is specific to
+this directory.
 
-First, run the development server:
+The frontend is a thin client: it renders the pipeline and calls the FastAPI backend.
+All logic lives server-side, so **the backend and database must be running** or the UI
+will load with a red health banner and no data. The root README's Quickstart starts
+those first, in order.
+
+## Running
 
 ```bash
+cp .env.local.example .env.local   # PowerShell: Copy-Item .env.local.example .env.local
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open http://localhost:3000.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Script          | Purpose                                 |
+| --------------- | --------------------------------------- |
+| `npm run dev`   | Development server with hot reload      |
+| `npm run build` | Production build                        |
+| `npm run start` | Serve a production build                |
+| `npm run lint`  | ESLint (`eslint-config-next`)           |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Configuration
 
-## Learn More
+One variable, in `.env.local`:
 
-To learn more about Next.js, take a look at the following resources:
+| Variable              | Default                 | Notes                                                             |
+| --------------------- | ----------------------- | ----------------------------------------------------------------- |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend origin. `NEXT_PUBLIC_` values are inlined into the browser bundle at build time — never put secrets here. |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The `/api/v1` prefix is added by the client, so set this to the origin only. If you
+changed the backend's port, change it here too — and make sure the new frontend origin
+is listed in `CORS_ORIGINS` in `backend/.env`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Layout
 
-## Deploy on Vercel
+```
+src/app/layout.tsx    Root layout; loads Geist via next/font/google
+src/app/page.tsx      The entire UI — ingest, extract, ask, report
+src/app/globals.css   Tailwind v4 theme (configured in CSS, no tailwind.config)
+src/lib/api.ts        Typed fetch client; mirrors the backend's Pydantic schemas
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+When you change a backend schema, update the matching type in `src/lib/api.ts` — the
+two are kept in sync by hand.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## A note on the Next.js version
+
+This project is on Next.js 16, which differs from earlier versions in ways that trip up
+generated code (see `AGENTS.md` in this directory). The authoritative docs for the
+pinned version ship inside the package, at `node_modules/next/dist/docs/` — prefer them
+over web results when they disagree.
