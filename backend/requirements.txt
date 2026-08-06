@@ -11,6 +11,9 @@ python-multipart==0.0.20
 # anthropic is only used by scripts/check_claude_api.py — the pipeline itself
 # runs fully offline and never calls a model.
 anthropic==0.120.2
+# google-cloud-documentai is only used by scripts/check_document_ai.py, for
+# the same reason — the pipeline never calls it directly.
+google-cloud-documentai==3.15.0
 pytest==8.4.2
 pytest-asyncio==1.3.0
 httpx==0.28.1
