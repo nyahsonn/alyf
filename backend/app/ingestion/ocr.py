@@ -16,6 +16,7 @@ library from the real environment, not from .env.
 """
 
 import io
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,14 @@ from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
 from app.core.config import settings
+
+# pypdf reports recoverable parse issues ("EOF marker not found", "Ignoring
+# wrong pointing object...") as logging.WARNING through the stdlib logging
+# module. With no handler configured that reaches Python's "handler of last
+# resort" and prints straight to stderr. _count_pages already treats a file
+# pypdf can't cleanly parse as unreadable and defers to Document AI's own
+# error, so the warning itself is noise rather than something to act on.
+logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 # Online (synchronous) processing caps the whole request at 20 MB. Larger files
 # need batch processing, which is a different API that writes its results to
