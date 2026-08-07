@@ -36,6 +36,10 @@ async def upload_document(
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(e)
         ) from None
+    except service.UploadTooLarge as e:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e)
+        ) from None
     except service.OcrFailed as e:
         # The underlying message can name the project and processor, so it is
         # logged rather than returned to whoever posted the file.

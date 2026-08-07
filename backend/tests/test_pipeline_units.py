@@ -6,11 +6,19 @@ Run with:  pytest
 import uuid
 from dataclasses import dataclass
 
+import pytest
+
 from app.core.embeddings import embed_text
 from app.core.config import settings
 from app.extraction.models import Fact
 from app.extraction.service import Candidate, dedupe_candidates, extract_candidates
-from app.ingestion.ocr import _remove_spans
+from app.ingestion.ocr import (
+    MAX_REQUEST_BYTES,
+    FileTooLarge,
+    OcrError,
+    _remove_spans,
+    extract_bytes,
+)
 from app.ingestion.service import looks_like_pdf, render_tables, split_into_chunks
 from app.reasoning.service import compose_answer
 
@@ -234,6 +242,15 @@ def test_removing_table_spans_merges_overlaps_and_closes_the_gap():
     # time would shift every offset after the first cut.
     text = "Intro line.\n\nAAA\nBBB\n\nClosing line."
     assert _remove_spans(text, [(13, 17), (16, 20)]) == "Intro line.\n\nClosing line."
+
+
+def test_oversized_file_is_rejected_without_calling_the_service():
+    # Raised before any request is built, so this needs no credentials. It must
+    # stay an OcrError subclass so callers that only care that OCR failed still
+    # catch it -- scripts/ocr_pdf.py among them.
+    assert issubclass(FileTooLarge, OcrError)
+    with pytest.raises(FileTooLarge, match="over the 20 MB limit"):
+        extract_bytes(b"%PDF-" + b"x" * MAX_REQUEST_BYTES)
 
 
 def test_pdf_is_detected_from_its_bytes_not_its_name():
