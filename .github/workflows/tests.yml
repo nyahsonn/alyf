@@ -1,0 +1,47 @@
+# Runs the backend unit tests. They exercise pure functions only -- no
+# PostgreSQL service and no Document AI credentials are needed, so please keep
+# it that way rather than adding either here. `backend/.env` is gitignored and
+# will not exist on the runner; every setting the tests touch falls back to the
+# default in app/core/config.py.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Both versions report, rather than the second being cancelled when the
+      # first fails -- a break in only one of them is the useful signal.
+      fail-fast: false
+      matrix:
+        # The floor pyproject.toml declares, and the version developed against.
+        python-version: ["3.11", "3.13"]
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # The full pinned set: the tests import app.ingestion.ocr, which imports
+      # the Document AI client library even though nothing here calls out to it.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest

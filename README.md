@@ -201,6 +201,9 @@ cd backend
 pytest
 ```
 
+GitHub Actions runs the same command on every push to `main` and every pull
+request, against Python 3.11 and 3.13 — see `.github/workflows/tests.yml`.
+
 Ruff is configured in `backend/pyproject.toml` (line length 100, rules `E,F,I,UP,B`)
 but is intentionally not a pinned dependency — install it however you prefer:
 
