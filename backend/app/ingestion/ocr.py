@@ -129,19 +129,22 @@ def extract_bytes(
     processor_id: str | None = None,
 ) -> OcrResult:
     """As `extract_pdf`, for bytes already in hand -- an upload, say."""
-    project_id = project_id or settings.docai_project_id
-    location = location or settings.docai_location
-    processor_id = processor_id or settings.docai_processor_id
-
-    if not project_id or not processor_id:
-        raise OcrError("Set DOCAI_PROJECT_ID and DOCAI_PROCESSOR_ID (see backend/.env.example).")
-
+    # Size first: a file too big to send is too big whether or not a processor
+    # has been configured, and reporting missing configuration instead sends the
+    # caller off fixing the wrong thing.
     if len(content) > MAX_REQUEST_BYTES:
         raise FileTooLarge(
             f"File is {len(content) / 1024 / 1024:.1f} MB, over the "
             f"{MAX_REQUEST_BYTES // 1024 // 1024} MB limit for online processing. "
             "Files this large need batch processing."
         )
+
+    project_id = project_id or settings.docai_project_id
+    location = location or settings.docai_location
+    processor_id = processor_id or settings.docai_processor_id
+
+    if not project_id or not processor_id:
+        raise OcrError("Set DOCAI_PROJECT_ID and DOCAI_PROCESSOR_ID (see backend/.env.example).")
 
     document = _process(content, mime_type, project_id, location, processor_id)
     return OcrResult(
