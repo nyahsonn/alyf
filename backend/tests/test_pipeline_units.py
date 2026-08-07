@@ -4,12 +4,14 @@ Run with:  pytest
 """
 
 import uuid
+from dataclasses import dataclass
 
 from app.core.embeddings import embed_text
 from app.core.config import settings
 from app.extraction.models import Fact
 from app.extraction.service import Candidate, dedupe_candidates, extract_candidates
-from app.ingestion.service import split_into_chunks
+from app.ingestion.ocr import _remove_spans
+from app.ingestion.service import looks_like_pdf, render_tables, split_into_chunks
 from app.reasoning.service import compose_answer
 
 
@@ -212,3 +214,77 @@ def test_similar_text_scores_higher_than_unrelated_text():
     related = embed_text("revenue growth for the quarter was strong")
     unrelated = embed_text("the office cat is named biscuit")
     assert cosine(query, related) > cosine(query, unrelated)
+
+
+@dataclass(frozen=True)
+class _FakeTable:
+    """Stands in for ocr.Table.
+
+    `render_tables` reads these three fields and nothing else, so the suite
+    stays free of the Document AI client library and its credentials.
+    """
+
+    page_number: int
+    header_rows: list[list[str]]
+    body_rows: list[list[str]]
+
+
+def test_removing_table_spans_merges_overlaps_and_closes_the_gap():
+    # Document AI can report spans that overlap or nest; cutting them one at a
+    # time would shift every offset after the first cut.
+    text = "Intro line.\n\nAAA\nBBB\n\nClosing line."
+    assert _remove_spans(text, [(13, 17), (16, 20)]) == "Intro line.\n\nClosing line."
+
+
+def test_pdf_is_detected_from_its_bytes_not_its_name():
+    assert looks_like_pdf(b"%PDF-1.7\n...")
+    assert not looks_like_pdf(b"Quarter: Q3 2026")
+
+
+def test_wide_table_folds_the_column_header_into_the_label():
+    rendered = render_tables(
+        [
+            _FakeTable(
+                page_number=2,
+                header_rows=[["Metric", "Q1", "Q2"]],
+                body_rows=[["Revenue", "4.2M", "5.1M"], ["Headcount", "38", "44"]],
+            )
+        ]
+    )
+    lines = rendered.splitlines()
+    assert lines[0] == "## Table 1 (page 2)"
+    assert "Revenue Q1: 4.2M" in lines
+    assert "Revenue Q2: 5.1M" in lines
+    assert "Headcount Q2: 44" in lines
+
+
+def test_two_column_table_uses_the_row_label_alone():
+    # Already a label/value pair -- folding "Value" in would only add noise.
+    rendered = render_tables(
+        [
+            _FakeTable(
+                page_number=1,
+                header_rows=[["Field", "Value"]],
+                body_rows=[["Invoice date", "2026-08-07"]],
+            )
+        ]
+    )
+    assert "Invoice date: 2026-08-07" in rendered.splitlines()
+
+
+def test_rendered_table_extracts_as_attributes_not_one_merged_claim():
+    # The point of rendering at all: raw OCR puts each cell on its own line with
+    # no punctuation, so the extractor would glue the whole table into a single
+    # bogus "metric". Label/value lines under a heading extract cleanly instead.
+    rendered = render_tables(
+        [
+            _FakeTable(
+                page_number=1,
+                header_rows=[["Metric", "Q1"]],
+                body_rows=[["Revenue", "4.2M"], ["Headcount", "38"]],
+            )
+        ]
+    )
+    candidates = extract_candidates(rendered)
+    assert {candidate.kind for candidate in candidates} == {"attribute"}
+    assert {candidate.label for candidate in candidates} == {"Revenue", "Headcount"}

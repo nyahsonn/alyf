@@ -1,5 +1,6 @@
 """HTTP endpoints for the ingestion module."""
 
+import logging
 import uuid
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
@@ -7,6 +8,8 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, sta
 from app.api.deps import SessionDep
 from app.ingestion import service
 from app.ingestion.schemas import DocumentCreate, DocumentDetail, DocumentRead
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["ingestion"])
 
@@ -21,23 +24,35 @@ async def create_document(payload: DocumentCreate, session: SessionDep) -> Docum
 @router.post("/upload", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     session: SessionDep,
-    file: UploadFile = File(..., description="A UTF-8 text file (.txt, .md, .csv)"),
+    file: UploadFile = File(..., description="A PDF, or a UTF-8 text file (.txt, .md, .csv)"),
     title: str | None = Form(default=None),
 ) -> DocumentRead:
-    """Ingest a plain-text file upload."""
+    """Ingest a file upload. PDFs are sent to Document AI for OCR first."""
     raw = await file.read()
+
     try:
-        content = raw.decode("utf-8")
-    except UnicodeDecodeError:
+        content, source_type = await service.text_from_upload(raw)
+    except service.UnsupportedUpload as e:
         raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Only UTF-8 text files are supported (.txt, .md, .csv).",
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(e)
+        ) from None
+    except service.OcrFailed as e:
+        # The underlying message can name the project and processor, so it is
+        # logged rather than returned to whoever posted the file.
+        logger.error("OCR failed for upload %r: %s", file.filename, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not extract text from the PDF. See the server log for details.",
         ) from None
 
     if not content.strip():
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="The uploaded file is empty.",
+            detail=(
+                "No text could be read from this PDF -- it may be blank."
+                if source_type == "pdf"
+                else "The uploaded file is empty."
+            ),
         )
 
     document = await service.ingest_document(
@@ -45,7 +60,7 @@ async def upload_document(
         DocumentCreate(
             title=title or file.filename or "Untitled upload",
             content=content,
-            source_type="file",
+            source_type=source_type,
             source_ref=file.filename,
         ),
     )
