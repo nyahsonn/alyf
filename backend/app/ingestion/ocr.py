@@ -15,6 +15,7 @@ pointing at a service account key file. That last one is read by the Google auth
 library from the real environment, not from .env.
 """
 
+import io
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,8 @@ from pathlib import Path
 from google.api_core import exceptions as gax_exceptions
 from google.auth import exceptions as auth_exceptions
 from google.cloud import documentai
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from app.core.config import settings
 
@@ -30,9 +33,18 @@ from app.core.config import settings
 # Cloud Storage -- refuse here rather than send a request that cannot succeed.
 MAX_REQUEST_BYTES = 20 * 1024 * 1024
 
-# Most processors also cap online requests at 15 pages. Counting pages would
-# mean parsing the PDF ourselves, so that limit is left to the API to report --
-# see the InvalidArgument branch in `_process`.
+# Most processors also cap online requests at 15 pages. Google's docs describe
+# an "imageless mode" that raises this to 30 -- tried here and reverted, since
+# the processor this project uses (a Form Parser) enforces 15 regardless and
+# returns a vaguer 500 instead of the usual 400 when it is set.
+#
+# Document AI's own enforcement of this limit is not reliable: the same
+# over-limit file has been seen to return a clean 400 on one call and, on an
+# otherwise identical retry, silently succeed while returning only the first
+# ONLINE_PAGE_LIMIT pages -- no error, no indication anything was cut. Pages
+# are counted locally with pypdf instead of trusting the API to say so; see
+# `_count_pages` and the InvalidArgument branch in `_process`, which stays as
+# a backstop for files pypdf itself cannot parse.
 ONLINE_PAGE_LIMIT = 15
 
 # Three or more line breaks, left behind when a table is cut out from between
@@ -56,6 +68,16 @@ class FileTooLarge(OcrError):
     names only sizes -- no project or processor -- so it is safe to hand back to
     whoever supplied the file. Subclasses OcrError so callers that only care
     that OCR failed still catch it.
+    """
+
+
+class TooManyPages(OcrError):
+    """The PDF has more pages than the online-processing limit allows.
+
+    Decided locally, same reasoning as `FileTooLarge` -- and more load-bearing
+    here, since Document AI's own rejection of an over-limit file is not
+    reliable (see `ONLINE_PAGE_LIMIT`). Its message names only a page count,
+    so it is safe to hand back to whoever supplied the file.
     """
 
 
@@ -139,6 +161,16 @@ def extract_bytes(
             "Files this large need batch processing."
         )
 
+    # Same reasoning, and the more important of the two checks -- see
+    # ONLINE_PAGE_LIMIT. A page count of None means pypdf could not parse the
+    # file; that is left for Document AI to report, rather than guessed at here.
+    page_count = _count_pages(content)
+    if page_count is not None and page_count > ONLINE_PAGE_LIMIT:
+        raise TooManyPages(
+            f"PDF has {page_count} pages, over the {ONLINE_PAGE_LIMIT}-page limit "
+            "for online processing. Split it, or use batch processing."
+        )
+
     project_id = project_id or settings.docai_project_id
     location = location or settings.docai_location
     processor_id = processor_id or settings.docai_processor_id
@@ -153,6 +185,20 @@ def extract_bytes(
         tables=_read_tables(document),
         prose=_text_outside_tables(document),
     )
+
+
+def _count_pages(content: bytes) -> int | None:
+    """Best-effort page count, without asking Document AI.
+
+    Returns None rather than raising if the bytes cannot be parsed as a PDF at
+    all -- an encrypted or malformed file, say. Document AI's own error for a
+    file it cannot read is clearer than anything worth constructing here, so an
+    unparseable file just skips this check and goes on to the API.
+    """
+    try:
+        return len(PdfReader(io.BytesIO(content)).pages)
+    except (PdfReadError, ValueError):
+        return None
 
 
 def _process(
