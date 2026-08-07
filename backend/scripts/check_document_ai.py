@@ -15,12 +15,18 @@ library, not from the .env file.
 """
 
 import base64
-import os
 import sys
+from pathlib import Path
 
 from google.api_core import exceptions as gax_exceptions
 from google.auth import exceptions as auth_exceptions
 from google.cloud import documentai
+
+# Run directly and only this folder is importable, so put the backend root on
+# the path before importing app.*
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core.config import settings  # noqa: E402
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -34,9 +40,9 @@ TEST_IMAGE = base64.b64decode(
 
 
 def main() -> int:
-    project_id = os.environ.get("DOCAI_PROJECT_ID")
-    location = os.environ.get("DOCAI_LOCATION", "us")
-    processor_id = os.environ.get("DOCAI_PROCESSOR_ID")
+    project_id = settings.docai_project_id
+    location = settings.docai_location
+    processor_id = settings.docai_processor_id
 
     if not project_id or not processor_id:
         print("Set DOCAI_PROJECT_ID and DOCAI_PROCESSOR_ID (see backend/.env.example).")
