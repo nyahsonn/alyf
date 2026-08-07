@@ -190,7 +190,7 @@ export default function Home() {
             <input
               ref={fileInput}
               type="file"
-              accept=".txt,.md,.csv"
+              accept=".txt,.md,.csv,.pdf"
               className="hidden"
               onChange={(event) => {
                 const file = event.target.files?.[0];
@@ -203,7 +203,7 @@ export default function Home() {
               onClick={() => fileInput.current?.click()}
               loading={busy === "upload"}
             >
-              …or upload a .txt / .md file
+              …or upload a .txt / .md / .pdf file
             </Button>
           </Card>
 

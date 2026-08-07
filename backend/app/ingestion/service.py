@@ -6,7 +6,9 @@ is the extraction module's job.
 
 import re
 import uuid
+from typing import TYPE_CHECKING
 
+import anyio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +16,26 @@ from app.core.config import settings
 from app.ingestion.models import Chunk, Document
 from app.ingestion.schemas import DocumentCreate
 
+if TYPE_CHECKING:  # Type-only: importing ocr at runtime would defeat the lazy import below.
+    from app.ingestion.ocr import Table
+
 _WORD_RE = re.compile(r"\S+")
+
+# Every PDF opens with this. The filename and the browser's content type are
+# both supplied by the client and are routinely wrong, so the bytes decide.
+_PDF_MAGIC = b"%PDF-"
+
+
+class UnsupportedUpload(ValueError):
+    """The uploaded bytes are neither a PDF nor UTF-8 text."""
+
+
+class OcrFailed(RuntimeError):
+    """A PDF was recognised but Document AI could not read it.
+
+    Wraps `ocr.OcrError` so callers -- the API routes especially -- never need
+    to import the Document AI client library to handle a failure.
+    """
 
 
 def split_into_chunks(
@@ -53,6 +74,91 @@ def split_into_chunks(
         if start + size >= len(words):
             break
     return chunks
+
+
+def looks_like_pdf(raw: bytes) -> bool:
+    """Decide from the bytes themselves whether this upload is a PDF."""
+    return raw.startswith(_PDF_MAGIC)
+
+
+def render_tables(tables: list["Table"]) -> str:
+    """Render OCR tables as lines the rule-based extractor can read.
+
+    Document AI returns a table as cells, and `document.text` holds those same
+    cells one per line with nothing tying a number back to the row and column it
+    came from -- "Revenue" on one line, "4.2M" on the next. Written out as
+    "Label: value" pairs the relationship survives, and that is the one shape
+    `extract_candidates` already recognises.
+
+    The first column is taken as the row's label, which holds for most data
+    tables; where it does not, the cost is an odd-looking label rather than a
+    lost row. Tables wider than two columns fold the column header into the
+    label ("Revenue Q2: 5.1M"). Two-column tables are already label/value pairs,
+    so they use the row label alone.
+
+    Each table gets a Markdown heading. The extractor reads headings as
+    structure and breaks its prose blocks there -- without one, rows carry no
+    terminating punctuation and the whole table merges into a single bogus claim.
+    """
+    blocks: list[str] = []
+
+    for position, table in enumerate(tables, start=1):
+        headers = table.header_rows[0] if table.header_rows else []
+        # A table with no body is usually one the parser read as all-header;
+        # treat those rows as data rather than dropping the table.
+        rows = table.body_rows or table.header_rows
+        lines = [f"## Table {position} (page {table.page_number})", ""]
+
+        for row in rows:
+            label = row[0].strip() if row else ""
+            if len(row) == 1:
+                # Nothing to pair the cell with -- keep the text, drop the shape.
+                lines.extend([label] if label else [])
+                continue
+            for index, cell in enumerate(row[1:], start=1):
+                cell = cell.strip()
+                if not label or not cell:
+                    continue
+                header = headers[index].strip() if index < len(headers) else ""
+                qualified = f"{label} {header}" if len(row) > 2 and header else label
+                lines.append(f"{qualified}: {cell}")
+
+        if len(lines) > 2:
+            blocks.append("\n".join(lines))
+
+    return "\n\n".join(blocks)
+
+
+async def text_from_upload(raw: bytes) -> tuple[str, str]:
+    """Turn uploaded bytes into document text, plus the source_type to record.
+
+    PDFs go to Document AI; everything else has to be UTF-8 text. Raises
+    `UnsupportedUpload` or `OcrFailed`.
+    """
+    if not looks_like_pdf(raw):
+        try:
+            return raw.decode("utf-8"), "file"
+        except UnicodeDecodeError as e:
+            raise UnsupportedUpload(
+                "Only PDFs and UTF-8 text files are supported (.pdf, .txt, .md, .csv)."
+            ) from e
+
+    # Imported here, not at module scope, so the offline pipeline never loads the
+    # Document AI client library: only an actual PDF upload pulls it in.
+    from app.ingestion.ocr import OcrError, extract_bytes
+
+    try:
+        # The Document AI client is synchronous and does network I/O, so it goes
+        # to a worker thread rather than stalling the event loop for every other
+        # request in flight.
+        result = await anyio.to_thread.run_sync(extract_bytes, raw)
+    except OcrError as e:
+        raise OcrFailed(str(e)) from e
+
+    # `prose` rather than `text`: the tables are rendered separately just below,
+    # and storing both would duplicate every cell.
+    sections = [result.prose, render_tables(result.tables)]
+    return "\n\n".join(section for section in sections if section), "pdf"
 
 
 async def ingest_document(session: AsyncSession, payload: DocumentCreate) -> Document:

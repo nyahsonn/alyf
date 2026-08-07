@@ -22,6 +22,9 @@ whole thing up — including real pgvector similarity search inside PostgreSQL �
 watch data move end to end. Both are designed to be swapped for an LLM later; see
 [Going from offline to real models](#going-from-offline-to-real-models).
 
+The one exception is [uploading a PDF](#pdfs), which calls out to Google Document AI
+for OCR. Text uploads, and every stage after ingestion, still need no credentials.
+
 ## Stack
 
 | Layer    | Choice                                                        |
@@ -98,6 +101,32 @@ curl -F "file=@data/samples/quarterly-update.md" http://localhost:8000/api/v1/do
 Then extract facts from the returned document id, and ask something like
 *"what happened to revenue?"*
 
+### PDFs
+
+`POST /documents/upload` recognises a PDF from its own bytes — not the filename or
+the browser's content type — and sends it to Google Document AI for OCR. Everything
+else must be UTF-8 text, and is rejected with a `415` if it is not. Documents that
+arrive this way are stored with `source_type: "pdf"`.
+
+Point `DOCAI_PROCESSOR_ID` at a **Form Parser** processor. A plain Document OCR
+processor returns text alone, and tables are the reason to use OCR at all: Document
+AI flattens a table into one cell per line, which loses the link between a number and
+the row and column it came from. The table regions are cut out of that text and
+re-emitted as `Label: value` lines instead, which is the shape the rule-based
+extractor reads — so `Revenue Q2: 5.1M` becomes a fact, rather than the whole page
+becoming one unusable claim.
+
+Two limits come from the synchronous Document AI call: 15 pages and 20 MB. Larger
+files need batch processing, which is a different API.
+
+Check credentials before uploading anything, and look at raw OCR output directly:
+
+```bash
+cd backend
+python scripts/check_document_ai.py            # credentials + processor reachable?
+python scripts/ocr_pdf.py path/to/file.pdf     # raw text and tables, printed
+```
+
 ## API
 
 All routes are mounted under `/api/v1`.
@@ -107,7 +136,7 @@ All routes are mounted under `/api/v1`.
 | `GET`    | `/health`                       | Liveness check                                 |
 | `GET`    | `/health/db`                    | Database connectivity and pgvector status      |
 | `POST`   | `/documents`                    | Ingest a document from a JSON body             |
-| `POST`   | `/documents/upload`             | Ingest an uploaded file (multipart)            |
+| `POST`   | `/documents/upload`             | Ingest an uploaded file — PDFs are OCR'd first |
 | `GET`    | `/documents`                    | List documents                                 |
 | `GET`    | `/documents/{id}`               | Document detail, including its chunks          |
 | `DELETE` | `/documents/{id}`               | Delete a document and everything derived from it |
@@ -143,6 +172,13 @@ gitignored.
 | `DATABASE_URL`         | `postgresql+asyncpg://alyf:alyf@localhost:5432/alyf` | The `+asyncpg` suffix is required              |
 | `EMBEDDING_DIMENSIONS` | `384`                                                | Changing this requires recreating `facts`      |
 | `CORS_ORIGINS`         | `http://localhost:3000`                              | Comma-separated                                |
+| `DOCAI_PROJECT_ID`     | —                                                    | Google Cloud project holding the processor     |
+| `DOCAI_LOCATION`       | `us`                                                 | Must match the processor's region              |
+| `DOCAI_PROCESSOR_ID`   | —                                                    | Use a **Form Parser** processor — see [PDFs](#pdfs) |
+
+Document AI also needs `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service account
+key file. That one is read from the real environment by the Google auth library, not
+from `backend/.env`. Only PDF uploads use any of this.
 
 Chunking is tunable in `backend/app/core/config.py` — `chunk_size_words` (180) and
 `chunk_overlap_words` (30).
@@ -155,8 +191,9 @@ Chunking is tunable in `backend/app/core/config.py` — `chunk_size_words` (180)
 
 ## Tests
 
-Nine unit tests cover chunking (4), the rule-based extractor (2), and embedding (3).
-They exercise pure functions only, so no database or running server is needed:
+Twenty-seven unit tests cover chunking (4), the rule-based extractor (5), dedupe (6),
+answer composition (4), embedding (3), and PDF/table handling (5). They exercise pure
+functions only, so no database or running server is needed:
 
 ```bash
 cd backend
