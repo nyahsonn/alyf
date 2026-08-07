@@ -14,8 +14,11 @@ from app.extraction.models import Fact
 from app.extraction.service import Candidate, dedupe_candidates, extract_candidates
 from app.ingestion.ocr import (
     MAX_REQUEST_BYTES,
+    ONLINE_PAGE_LIMIT,
     FileTooLarge,
     OcrError,
+    TooManyPages,
+    _count_pages,
     _remove_spans,
     extract_bytes,
 )
@@ -251,6 +254,47 @@ def test_oversized_file_is_rejected_without_calling_the_service():
     assert issubclass(FileTooLarge, OcrError)
     with pytest.raises(FileTooLarge, match="over the 20 MB limit"):
         extract_bytes(b"%PDF-" + b"x" * MAX_REQUEST_BYTES)
+
+
+def _make_pdf_bytes(num_pages: int) -> bytes:
+    """A real, minimal PDF with the given number of blank pages.
+
+    Built with pypdf itself rather than a fixture file, so the page-count
+    tests stay pure functions with no file on disk to keep in sync.
+    """
+    import io
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    for _ in range(num_pages):
+        writer.add_blank_page(width=72, height=72)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def test_page_count_matches_a_real_pdf():
+    assert _count_pages(_make_pdf_bytes(3)) == 3
+
+
+def test_page_count_is_none_for_bytes_that_are_not_a_parseable_pdf():
+    # Deliberately broad: pypdf raises different exception subclasses for an
+    # empty file, a truncated one, and outright garbage. All should defer to
+    # Document AI's own error rather than crash this check.
+    assert _count_pages(b"") is None
+    assert _count_pages(b"%PDF-1.4 not really a pdf") is None
+
+
+def test_pdf_over_the_page_limit_is_rejected_without_calling_the_service():
+    # Same shape as test_oversized_file_is_rejected_without_calling_the_service,
+    # and for a related reason: Document AI's own enforcement of this limit
+    # turned out not to be reliable (see ONLINE_PAGE_LIMIT's comment), so the
+    # count has to be trustworthy on its own, before any request is sent.
+    assert issubclass(TooManyPages, OcrError)
+    content = _make_pdf_bytes(ONLINE_PAGE_LIMIT + 1)
+    with pytest.raises(TooManyPages, match=f"{ONLINE_PAGE_LIMIT + 1} pages"):
+        extract_bytes(content)
 
 
 def test_pdf_is_detected_from_its_bytes_not_its_name():
