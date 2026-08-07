@@ -48,6 +48,17 @@ class OcrError(RuntimeError):
     """
 
 
+class FileTooLarge(OcrError):
+    """The file is over the online-processing size limit.
+
+    Separate from the rest because it is the caller's fault rather than the
+    service's, and it is decided here without a request being sent. Its message
+    names only sizes -- no project or processor -- so it is safe to hand back to
+    whoever supplied the file. Subclasses OcrError so callers that only care
+    that OCR failed still catch it.
+    """
+
+
 @dataclass(frozen=True)
 class Table:
     """One table on one page, as cell text. No merged spans, no styling."""
@@ -126,7 +137,7 @@ def extract_bytes(
         raise OcrError("Set DOCAI_PROJECT_ID and DOCAI_PROCESSOR_ID (see backend/.env.example).")
 
     if len(content) > MAX_REQUEST_BYTES:
-        raise OcrError(
+        raise FileTooLarge(
             f"File is {len(content) / 1024 / 1024:.1f} MB, over the "
             f"{MAX_REQUEST_BYTES // 1024 // 1024} MB limit for online processing. "
             "Files this large need batch processing."

@@ -38,6 +38,15 @@ class OcrFailed(RuntimeError):
     """
 
 
+class UploadTooLarge(ValueError):
+    """The PDF is over the size Document AI will accept in one request.
+
+    Kept apart from `OcrFailed`: the service never saw this file, so it is the
+    upload that was wrong rather than anything upstream. Its message carries no
+    configuration detail and can go straight back to the client.
+    """
+
+
 def split_into_chunks(
     text: str,
     size_words: int | None = None,
@@ -145,13 +154,16 @@ async def text_from_upload(raw: bytes) -> tuple[str, str]:
 
     # Imported here, not at module scope, so the offline pipeline never loads the
     # Document AI client library: only an actual PDF upload pulls it in.
-    from app.ingestion.ocr import OcrError, extract_bytes
+    from app.ingestion.ocr import FileTooLarge, OcrError, extract_bytes
 
     try:
         # The Document AI client is synchronous and does network I/O, so it goes
         # to a worker thread rather than stalling the event loop for every other
         # request in flight.
         result = await anyio.to_thread.run_sync(extract_bytes, raw)
+    except FileTooLarge as e:
+        # Before OcrError, which it subclasses.
+        raise UploadTooLarge(str(e)) from e
     except OcrError as e:
         raise OcrFailed(str(e)) from e
 

@@ -116,8 +116,9 @@ re-emitted as `Label: value` lines instead, which is the shape the rule-based
 extractor reads — so `Revenue Q2: 5.1M` becomes a fact, rather than the whole page
 becoming one unusable claim.
 
-Two limits come from the synchronous Document AI call: 15 pages and 20 MB. Larger
-files need batch processing, which is a different API.
+Two limits come from the synchronous Document AI call: 15 pages and 20 MB. A file over
+the size limit is rejected with a `413` before anything is sent; larger files need
+batch processing, which is a different API.
 
 Check credentials before uploading anything, and look at raw OCR output directly:
 
@@ -191,8 +192,8 @@ Chunking is tunable in `backend/app/core/config.py` — `chunk_size_words` (180)
 
 ## Tests
 
-Twenty-seven unit tests cover chunking (4), the rule-based extractor (5), dedupe (6),
-answer composition (4), embedding (3), and PDF/table handling (5). They exercise pure
+Twenty-eight unit tests cover chunking (4), the rule-based extractor (5), dedupe (6),
+answer composition (4), embedding (3), and PDF/table handling (6). They exercise pure
 functions only, so no database or running server is needed:
 
 ```bash
