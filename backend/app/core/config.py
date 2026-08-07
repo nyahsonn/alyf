@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     docai_location: str = "us"
     docai_processor_id: str = ""
 
+    # Cloud Storage bucket used as scratch space for PDFs over ONLINE_PAGE_LIMIT
+    # pages, which go through Document AI's batch API instead (see ocr.py,
+    # _process_batch). Only needed for those; left blank, batch requests fail
+    # with a message that says so rather than the pipeline refusing to start.
+    docai_gcs_bucket: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

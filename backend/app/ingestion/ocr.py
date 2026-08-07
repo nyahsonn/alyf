@@ -18,12 +18,13 @@ library from the real environment, not from .env.
 import io
 import logging
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from google.api_core import exceptions as gax_exceptions
 from google.auth import exceptions as auth_exceptions
-from google.cloud import documentai
+from google.cloud import documentai, storage
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
@@ -37,15 +38,20 @@ from app.core.config import settings
 # error, so the warning itself is noise rather than something to act on.
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 
-# Online (synchronous) processing caps the whole request at 20 MB. Larger files
-# need batch processing, which is a different API that writes its results to
-# Cloud Storage -- refuse here rather than send a request that cannot succeed.
-MAX_REQUEST_BYTES = 20 * 1024 * 1024
+# Online (synchronous) processing caps the whole request at 20 MB. A file over
+# that routes to batch processing instead of being rejected, same as a page
+# count over ONLINE_PAGE_LIMIT does -- see `extract_bytes`. Batch raises the
+# ceiling to 1 GB, Document AI's own cap for a single document; only a file
+# over BATCH_REQUEST_BYTES has no processing path left at all.
+ONLINE_REQUEST_BYTES = 20 * 1024 * 1024
+BATCH_REQUEST_BYTES = 1024 * 1024 * 1024
 
-# Most processors also cap online requests at 15 pages. Google's docs describe
-# an "imageless mode" that raises this to 30 -- tried here and reverted, since
-# the processor this project uses (a Form Parser) enforces 15 regardless and
-# returns a vaguer 500 instead of the usual 400 when it is set.
+# Most processors also cap online (synchronous) requests at 15 pages. Google's
+# docs describe an "imageless mode" that raises this to 30 -- tried here and
+# reverted, since the processor this project uses (a Form Parser) enforces 15
+# regardless and returns a vaguer 500 instead of the usual 400 when it is set.
+# A PDF over this limit goes through batch processing instead (see
+# `_process_batch`), which has no such issue since it never takes this path.
 #
 # Document AI's own enforcement of this limit is not reliable: the same
 # over-limit file has been seen to return a clean 400 on one call and, on an
@@ -55,6 +61,16 @@ MAX_REQUEST_BYTES = 20 * 1024 * 1024
 # `_count_pages` and the InvalidArgument branch in `_process`, which stays as
 # a backstop for files pypdf itself cannot parse.
 ONLINE_PAGE_LIMIT = 15
+
+# Document AI's own cap for a single document in a batch (asynchronous)
+# request. A PDF over this has no processing path available at all.
+BATCH_PAGE_LIMIT = 500
+
+# How long to wait for a batch job to finish before giving up. `extract_bytes`
+# runs on a worker thread (see app/ingestion/service.py), so blocking here
+# blocks only that thread, not the event loop -- but it still has to give up
+# at some point rather than hang forever if Document AI never finishes.
+BATCH_TIMEOUT_SECONDS = 600
 
 # Three or more line breaks, left behind when a table is cut out from between
 # two paragraphs.
@@ -70,23 +86,27 @@ class OcrError(RuntimeError):
 
 
 class FileTooLarge(OcrError):
-    """The file is over the online-processing size limit.
+    """The file is over the size limit Document AI's batch API allows.
 
-    Separate from the rest because it is the caller's fault rather than the
-    service's, and it is decided here without a request being sent. Its message
-    names only sizes -- no project or processor -- so it is safe to hand back to
-    whoever supplied the file. Subclasses OcrError so callers that only care
-    that OCR failed still catch it.
+    Decided locally, without a request being sent, same reasoning as
+    `TooManyPages`. A file over `ONLINE_REQUEST_BYTES` but within
+    `BATCH_REQUEST_BYTES` is not an error at all; it just routes to
+    `_process_batch` instead of `_process`. Its message names only sizes -- no
+    project or processor -- so it is safe to hand back to whoever supplied the
+    file. Subclasses OcrError so callers that only care that OCR failed still
+    catch it.
     """
 
 
 class TooManyPages(OcrError):
-    """The PDF has more pages than the online-processing limit allows.
+    """The PDF has more pages than Document AI's batch API allows.
 
     Decided locally, same reasoning as `FileTooLarge` -- and more load-bearing
-    here, since Document AI's own rejection of an over-limit file is not
-    reliable (see `ONLINE_PAGE_LIMIT`). Its message names only a page count,
-    so it is safe to hand back to whoever supplied the file.
+    here, since Document AI's own rejection of an over-limit online request is
+    not reliable (see `ONLINE_PAGE_LIMIT`). A page count over `ONLINE_PAGE_LIMIT`
+    but within `BATCH_PAGE_LIMIT` is not an error at all; it just routes to
+    `_process_batch` instead. Its message names only a page count, so it is
+    safe to hand back to whoever supplied the file.
     """
 
 
@@ -160,24 +180,24 @@ def extract_bytes(
     processor_id: str | None = None,
 ) -> OcrResult:
     """As `extract_pdf`, for bytes already in hand -- an upload, say."""
-    # Size first: a file too big to send is too big whether or not a processor
-    # has been configured, and reporting missing configuration instead sends the
-    # caller off fixing the wrong thing.
-    if len(content) > MAX_REQUEST_BYTES:
+    # Size first: a file too big for even batch processing is too big whether
+    # or not a processor has been configured, and reporting missing
+    # configuration instead sends the caller off fixing the wrong thing.
+    if len(content) > BATCH_REQUEST_BYTES:
         raise FileTooLarge(
             f"File is {len(content) / 1024 / 1024:.1f} MB, over the "
-            f"{MAX_REQUEST_BYTES // 1024 // 1024} MB limit for online processing. "
-            "Files this large need batch processing."
+            f"{BATCH_REQUEST_BYTES // 1024 // 1024} MB limit Document AI's batch "
+            "processing allows."
         )
 
     # Same reasoning, and the more important of the two checks -- see
     # ONLINE_PAGE_LIMIT. A page count of None means pypdf could not parse the
     # file; that is left for Document AI to report, rather than guessed at here.
     page_count = _count_pages(content)
-    if page_count is not None and page_count > ONLINE_PAGE_LIMIT:
+    if page_count is not None and page_count > BATCH_PAGE_LIMIT:
         raise TooManyPages(
-            f"PDF has {page_count} pages, over the {ONLINE_PAGE_LIMIT}-page limit "
-            "for online processing. Split it, or use batch processing."
+            f"PDF has {page_count} pages, over the {BATCH_PAGE_LIMIT}-page limit "
+            "Document AI's batch processing allows. Split it into smaller files."
         )
 
     project_id = project_id or settings.docai_project_id
@@ -187,13 +207,17 @@ def extract_bytes(
     if not project_id or not processor_id:
         raise OcrError("Set DOCAI_PROJECT_ID and DOCAI_PROCESSOR_ID (see backend/.env.example).")
 
-    document = _process(content, mime_type, project_id, location, processor_id)
-    return OcrResult(
-        text=document.text,
-        page_count=len(document.pages),
-        tables=_read_tables(document),
-        prose=_text_outside_tables(document),
+    # Either dimension alone can force batch: a file can be small enough in
+    # bytes but too long in pages, or short enough in pages but too heavy in
+    # bytes (a lot of embedded images, say).
+    needs_batch = len(content) > ONLINE_REQUEST_BYTES or (
+        page_count is not None and page_count > ONLINE_PAGE_LIMIT
     )
+    if needs_batch:
+        documents = _process_batch(content, mime_type, project_id, location, processor_id)
+    else:
+        documents = [_process(content, mime_type, project_id, location, processor_id)]
+    return _build_result(documents)
 
 
 def _count_pages(content: bytes) -> int | None:
@@ -254,6 +278,134 @@ def _process(
         raise OcrError(f"Rate limited or over quota (429): {e.message}") from e
     except gax_exceptions.GoogleAPICallError as e:
         raise OcrError(f"API error: {e.message}") from e
+
+
+def _process_batch(
+    content: bytes,
+    mime_type: str,
+    project_id: str,
+    location: str,
+    processor_id: str,
+) -> list[documentai.Document]:
+    """As `_process`, for PDFs over ONLINE_PAGE_LIMIT pages or ONLINE_REQUEST_BYTES.
+
+    Document AI's batch API reads its input from Cloud Storage and writes its
+    output there too, rather than taking the file directly and returning a
+    response -- so this uploads `content`, waits on the resulting operation,
+    and reads back whatever JSON it wrote. A large document can come back
+    split across more than one output file ("shard"); `_build_result` puts the
+    pieces back together, so every caller gets a single list back either way.
+
+    The bucket is scratch space, not storage: everything written under this
+    job's prefix is deleted again before returning, success or failure.
+    """
+    if not settings.docai_gcs_bucket:
+        raise OcrError(
+            "Set DOCAI_GCS_BUCKET (see backend/.env.example) to process PDFs over "
+            f"{ONLINE_PAGE_LIMIT} pages or {ONLINE_REQUEST_BYTES // 1024 // 1024} MB -- "
+            "Document AI's batch API reads and writes Cloud Storage rather than "
+            "taking the file directly."
+        )
+
+    job_prefix = f"docai-batch/{uuid.uuid4().hex}/"
+    input_uri = f"gs://{settings.docai_gcs_bucket}/{job_prefix}input.pdf"
+    output_uri = f"gs://{settings.docai_gcs_bucket}/{job_prefix}output/"
+    storage_client = storage.Client(project=project_id)
+
+    try:
+        storage_client.bucket(settings.docai_gcs_bucket).blob(
+            f"{job_prefix}input.pdf"
+        ).upload_from_string(content, content_type=mime_type)
+
+        client = documentai.DocumentProcessorServiceClient(
+            client_options={"api_endpoint": f"{location}-documentai.googleapis.com"}
+        )
+        request = documentai.BatchProcessRequest(
+            name=client.processor_path(project_id, location, processor_id),
+            input_documents=documentai.BatchDocumentsInputConfig(
+                gcs_documents=documentai.GcsDocuments(
+                    documents=[documentai.GcsDocument(gcs_uri=input_uri, mime_type=mime_type)]
+                )
+            ),
+            document_output_config=documentai.DocumentOutputConfig(
+                gcs_output_config=documentai.DocumentOutputConfig.GcsOutputConfig(gcs_uri=output_uri)
+            ),
+        )
+        operation = client.batch_process_documents(request=request)
+        try:
+            # Polls on the client library's own backoff schedule and blocks
+            # this call's thread until the job finishes -- fine here since
+            # extract_bytes already runs off the event loop (see
+            # app/ingestion/service.py).
+            operation.result(timeout=BATCH_TIMEOUT_SECONDS)
+        except TimeoutError as e:
+            raise OcrError(
+                f"Document AI's batch job did not finish within {BATCH_TIMEOUT_SECONDS}s."
+            ) from e
+
+        metadata = documentai.BatchProcessMetadata(operation.metadata)
+        if metadata.state != documentai.BatchProcessMetadata.State.SUCCEEDED:
+            raise OcrError(f"Document AI's batch job failed: {metadata.state_message}")
+
+        return [
+            documentai.Document.from_json(blob.download_as_bytes(), ignore_unknown_fields=True)
+            for status in metadata.individual_process_statuses
+            for blob in storage_client.list_blobs(
+                settings.docai_gcs_bucket,
+                prefix=status.output_gcs_destination.removeprefix(
+                    f"gs://{settings.docai_gcs_bucket}/"
+                ),
+            )
+            if blob.name.endswith(".json")
+        ]
+    except auth_exceptions.DefaultCredentialsError as e:
+        raise OcrError(
+            "No credentials found. Set GOOGLE_APPLICATION_CREDENTIALS to a "
+            "service account key file."
+        ) from e
+    except auth_exceptions.RefreshError as e:
+        raise OcrError(
+            "Credentials were rejected. The key file may be invalid or the key revoked."
+        ) from e
+    except gax_exceptions.InvalidArgument as e:
+        raise OcrError(f"Document AI rejected the batch request (400): {e.message}") from e
+    except gax_exceptions.PermissionDenied as e:
+        raise OcrError(f"Authenticated, but access was denied (403): {e.message}") from e
+    except gax_exceptions.Forbidden as e:
+        raise OcrError(
+            f"Access to gs://{settings.docai_gcs_bucket} was denied (403): {e.message}"
+        ) from e
+    except gax_exceptions.NotFound as e:
+        raise OcrError(
+            f"Not found (404): {e.message} Check DOCAI_PROJECT_ID={project_id!r}, "
+            f"DOCAI_LOCATION={location!r}, DOCAI_PROCESSOR_ID={processor_id!r}, and "
+            f"DOCAI_GCS_BUCKET={settings.docai_gcs_bucket!r}."
+        ) from e
+    except gax_exceptions.ResourceExhausted as e:
+        raise OcrError(f"Rate limited or over quota (429): {e.message}") from e
+    except gax_exceptions.GoogleAPICallError as e:
+        raise OcrError(f"API error: {e.message}") from e
+    finally:
+        for blob in storage_client.list_blobs(settings.docai_gcs_bucket, prefix=job_prefix):
+            blob.delete()
+
+
+def _build_result(documents: list[documentai.Document]) -> OcrResult:
+    """Combine one or more Document AI results into the shape callers see.
+
+    A single element for the online path. More than one when a batch job
+    split a large PDF across output shards -- each shard is a self-contained
+    Document whose text/table/page fields only need concatenating, not
+    re-anchoring, since Document AI's shard boundaries fall on page breaks.
+    """
+    return OcrResult(
+        text="\n\n".join(document.text for document in documents),
+        page_count=sum(len(document.pages) for document in documents),
+        tables=[table for document in documents for table in _read_tables(document)],
+        prose="\n\n".join(
+            outside for document in documents if (outside := _text_outside_tables(document))
+        ),
+    )
 
 
 def _read_tables(document: documentai.Document) -> list[Table]:

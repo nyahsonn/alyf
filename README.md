@@ -120,8 +120,18 @@ Two limits apply to the synchronous Document AI call: 15 pages and 20 MB. Both a
 checked locally — pages by counting with `pypdf`, since Document AI's own rejection
 of an over-limit file turned out not to be reliable (the same file has been seen to
 return a clean error on one call and silently succeed with only the first 15 pages,
-no error at all, on the next) — so a file over either limit gets a `413` before
-anything is sent. Larger files need batch processing, which is a different API.
+no error at all, on the next).
+
+A PDF over either limit — 15 pages or 20 MB — is routed to Document AI's batch API
+instead of being rejected, transparently: the caller gets the same `OcrResult` back
+either way, just slower, since batch reads its input from Cloud Storage and writes
+its output there too rather than returning a response directly. That needs
+`DOCAI_GCS_BUCKET` set (see `backend/.env.example`); without it, a PDF over either
+online limit fails with a clear error rather than being silently truncated.
+
+Batch has its own, much larger ceiling — 500 pages and 1 GB, Document AI's own caps
+for a single document. A PDF over either of *those* has no processing path left at
+all and gets a `413` up front, same as any other oversized file.
 
 Check credentials before uploading anything, and look at raw OCR output directly:
 

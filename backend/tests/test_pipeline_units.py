@@ -13,11 +13,14 @@ from app.core.config import settings
 from app.extraction.models import Fact
 from app.extraction.service import Candidate, dedupe_candidates, extract_candidates
 from app.ingestion.ocr import (
-    MAX_REQUEST_BYTES,
+    BATCH_PAGE_LIMIT,
+    BATCH_REQUEST_BYTES,
     ONLINE_PAGE_LIMIT,
+    ONLINE_REQUEST_BYTES,
     FileTooLarge,
     OcrError,
     TooManyPages,
+    _build_result,
     _count_pages,
     _remove_spans,
     extract_bytes,
@@ -247,13 +250,33 @@ def test_removing_table_spans_merges_overlaps_and_closes_the_gap():
     assert _remove_spans(text, [(13, 17), (16, 20)]) == "Intro line.\n\nClosing line."
 
 
-def test_oversized_file_is_rejected_without_calling_the_service():
+def test_file_over_the_batch_byte_limit_is_rejected_without_calling_the_service(monkeypatch):
     # Raised before any request is built, so this needs no credentials. It must
     # stay an OcrError subclass so callers that only care that OCR failed still
-    # catch it -- scripts/ocr_pdf.py among them.
+    # catch it -- scripts/ocr_pdf.py among them. BATCH_REQUEST_BYTES (1 GB) is
+    # patched down so this does not need to allocate a real gigabyte to prove
+    # the check fires -- only a file over that has no processing path left,
+    # same shape as test_pdf_over_the_batch_limit_is_rejected_without_calling_the_service.
+    import app.ingestion.ocr as ocr
+
+    monkeypatch.setattr(ocr, "BATCH_REQUEST_BYTES", 1000)
     assert issubclass(FileTooLarge, OcrError)
-    with pytest.raises(FileTooLarge, match="over the 20 MB limit"):
-        extract_bytes(b"%PDF-" + b"x" * MAX_REQUEST_BYTES)
+    with pytest.raises(FileTooLarge, match="over the"):
+        extract_bytes(b"%PDF-" + b"x" * 1000)
+
+
+def test_file_between_online_and_batch_byte_limits_is_not_rejected(monkeypatch):
+    # A size in (ONLINE_REQUEST_BYTES, BATCH_REQUEST_BYTES] has a processing
+    # path -- batch -- so, unlike a truly oversized file, it must not be
+    # rejected outright. Same reasoning and same patching as
+    # test_pdf_between_online_and_batch_limits_is_not_rejected_for_its_page_count.
+    monkeypatch.setattr(settings, "docai_project_id", "test-project")
+    monkeypatch.setattr(settings, "docai_processor_id", "test-processor")
+    monkeypatch.setattr(settings, "docai_gcs_bucket", "")
+    content = b"%PDF-" + b"x" * (ONLINE_REQUEST_BYTES + 1)
+    with pytest.raises(OcrError, match="DOCAI_GCS_BUCKET") as exc_info:
+        extract_bytes(content)
+    assert not isinstance(exc_info.value, FileTooLarge)
 
 
 def _make_pdf_bytes(num_pages: int) -> bytes:
@@ -286,15 +309,49 @@ def test_page_count_is_none_for_bytes_that_are_not_a_parseable_pdf():
     assert _count_pages(b"%PDF-1.4 not really a pdf") is None
 
 
-def test_pdf_over_the_page_limit_is_rejected_without_calling_the_service():
+def test_pdf_over_the_batch_limit_is_rejected_without_calling_the_service():
     # Same shape as test_oversized_file_is_rejected_without_calling_the_service,
-    # and for a related reason: Document AI's own enforcement of this limit
-    # turned out not to be reliable (see ONLINE_PAGE_LIMIT's comment), so the
-    # count has to be trustworthy on its own, before any request is sent.
+    # and for a related reason: Document AI's own enforcement of the online
+    # limit turned out not to be reliable (see ONLINE_PAGE_LIMIT's comment), so
+    # counts are trusted locally instead. Unlike a count merely over
+    # ONLINE_PAGE_LIMIT, one over BATCH_PAGE_LIMIT has no processing path left
+    # to route to -- batch included -- so this one is a real rejection.
     assert issubclass(TooManyPages, OcrError)
-    content = _make_pdf_bytes(ONLINE_PAGE_LIMIT + 1)
-    with pytest.raises(TooManyPages, match=f"{ONLINE_PAGE_LIMIT + 1} pages"):
+    content = _make_pdf_bytes(BATCH_PAGE_LIMIT + 1)
+    with pytest.raises(TooManyPages, match=f"{BATCH_PAGE_LIMIT + 1} pages"):
         extract_bytes(content)
+
+
+def test_pdf_between_online_and_batch_limits_is_not_rejected_for_its_page_count(monkeypatch):
+    # A count in (ONLINE_PAGE_LIMIT, BATCH_PAGE_LIMIT] has a processing path --
+    # batch -- so, unlike an oversized file, it must not be rejected outright.
+    # Settings are patched so the outcome does not depend on whatever real
+    # Document AI configuration happens to be in backend/.env; DOCAI_GCS_BUCKET
+    # is left unset, so batch fails on that before any request reaches Google.
+    monkeypatch.setattr(settings, "docai_project_id", "test-project")
+    monkeypatch.setattr(settings, "docai_processor_id", "test-processor")
+    monkeypatch.setattr(settings, "docai_gcs_bucket", "")
+    content = _make_pdf_bytes(ONLINE_PAGE_LIMIT + 1)
+    with pytest.raises(OcrError, match="DOCAI_GCS_BUCKET") as exc_info:
+        extract_bytes(content)
+    assert not isinstance(exc_info.value, TooManyPages)
+
+
+def test_build_result_merges_batch_shards():
+    # Batch processing can split a large PDF across more than one output file
+    # ("shard"); _build_result is what stitches them back into one OcrResult.
+    from google.cloud import documentai
+
+    shard1 = documentai.Document(
+        text="Page one.\n", pages=[documentai.Document.Page(page_number=1)]
+    )
+    shard2 = documentai.Document(
+        text="Page two.\n", pages=[documentai.Document.Page(page_number=2)]
+    )
+    result = _build_result([shard1, shard2])
+    assert result.page_count == 2
+    assert "Page one." in result.text
+    assert "Page two." in result.text
 
 
 def test_pdf_is_detected_from_its_bytes_not_its_name():
