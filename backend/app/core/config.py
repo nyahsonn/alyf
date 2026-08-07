@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     chunk_size_words: int = 180
     chunk_overlap_words: int = 30
 
+    # Google Document AI, used by app/ingestion/ocr.py to read PDFs. The
+    # pipeline never calls it on its own. GOOGLE_APPLICATION_CREDENTIALS is
+    # deliberately not listed: the Google auth library reads that from the real
+    # environment, not from this file.
+    docai_project_id: str = ""
+    docai_location: str = "us"
+    docai_processor_id: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
