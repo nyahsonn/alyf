@@ -14,7 +14,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.embeddings import embed_text
-from app.extraction.models import Fact
+from app.extraction.home_inspection import extract_home_systems
+from app.extraction.models import Fact, HomeSystemRecord
 from app.ingestion import service as ingestion_service
 
 # "Label: value" lines, e.g. "Revenue: $4.2M". A dash only separates when it is
@@ -224,5 +225,59 @@ async def list_facts(
     query = select(Fact).order_by(Fact.confidence.desc(), Fact.created_at).limit(limit)
     if document_id is not None:
         query = query.where(Fact.document_id == document_id)
+    result = await session.execute(query)
+    return list(result.scalars())
+
+
+async def extract_home_report(
+    session: AsyncSession, document_id: uuid.UUID
+) -> list[HomeSystemRecord] | None:
+    """Run the AI Home Health Report extraction for a document, replacing any
+    previous run for it.
+
+    Unlike `extract_document`, this reads the document's whole content in one
+    call rather than per-chunk: a system's age, condition, and findings can be
+    scattered across a report, and Claude reads the full picture at once
+    instead of the chunk-by-chunk, dedupe-afterward approach the rule-based
+    extractor needs. Returns None if the document does not exist; raises
+    ExtractionError (see home_inspection.py) if Claude could not be reached or
+    refused the request.
+    """
+    document = await ingestion_service.get_document(session, document_id)
+    if document is None:
+        return None
+
+    report = extract_home_systems(document.content)
+
+    # Idempotent: a re-run should not double up systems.
+    await session.execute(
+        delete(HomeSystemRecord).where(HomeSystemRecord.document_id == document_id)
+    )
+
+    records = [
+        HomeSystemRecord(
+            document_id=document_id,
+            name=system.name,
+            estimated_age_years=system.estimated_age.years,
+            estimated_age_confidence=system.estimated_age.confidence,
+            condition=system.condition.rating,
+            condition_confidence=system.condition.confidence,
+            findings=system.findings.items,
+            findings_confidence=system.findings.confidence,
+        )
+        for system in report.systems
+    ]
+
+    for record in records:
+        session.add(record)
+
+    await session.commit()
+    for record in records:
+        await session.refresh(record)
+    return records
+
+
+async def get_home_report(session: AsyncSession, document_id: uuid.UUID) -> list[HomeSystemRecord]:
+    query = select(HomeSystemRecord).where(HomeSystemRecord.document_id == document_id)
     result = await session.execute(query)
     return list(result.scalars())

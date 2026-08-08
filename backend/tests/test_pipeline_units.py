@@ -14,7 +14,6 @@ from app.extraction.models import Fact
 from app.extraction.service import Candidate, dedupe_candidates, extract_candidates
 from app.ingestion.ocr import (
     BATCH_PAGE_LIMIT,
-    BATCH_REQUEST_BYTES,
     ONLINE_PAGE_LIMIT,
     ONLINE_REQUEST_BYTES,
     FileTooLarge,

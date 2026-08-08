@@ -8,8 +8,9 @@ pydantic-settings==2.13.0
 python-multipart==0.0.20
 
 # Development / testing
-# anthropic is only used by scripts/check_claude_api.py — the pipeline itself
-# runs fully offline and never calls a model.
+# anthropic is used by app/extraction/home_inspection.py (structured, LLM-based
+# extraction) and scripts/check_claude_api.py (a connectivity check) — the rest
+# of the pipeline runs fully offline and never calls a model.
 anthropic==0.120.2
 # google-cloud-documentai and pypdf are used by app/ingestion/ocr.py to OCR
 # PDF uploads (see README, "PDFs") — the rest of the pipeline stays offline.

@@ -1,10 +1,17 @@
 # ALYF
 
-A document-understanding pipeline. Raw source material goes in; structured facts,
-answers backed by evidence, and Markdown reports come out.
+ALYF turns a home inspection report into an **AI Home Health Report**: a structured,
+prioritized, continuously updatable picture of a home's systems — roof, HVAC, plumbing,
+electrical, water heater, foundation — with an age, a condition, findings, and a
+confidence score per field. Distribution is B2B2C through home inspectors: an
+inspector's commodity PDF becomes a premium, white-labeled deliverable handed to buyers
+at the point of sale, and every report run adds to ALYF's own structured, verified
+database of home data over time.
 
-ALYF is built as a **modular monolith** — one deployable backend, four modules with
-clear seams between them. Documents flow through the stages in order:
+Under that product sits a general **document-understanding pipeline** — raw source
+material goes in, structured facts and Markdown reports come out — built as a
+**modular monolith**: one deployable backend, four modules with clear seams between
+them. Documents flow through the stages in order:
 
 ```
 ingestion  ->  extraction  ->  reasoning  ->  reports
@@ -16,14 +23,16 @@ Each module owns its own tables, schemas, and service functions, and talks to it
 neighbours only through service calls — never by querying another module's tables.
 `reports` is the only stage that reads across the others.
 
-**It runs entirely offline.** No API keys, no model downloads. The embedder is a
-deterministic hashing embedder and the extractor is rule-based, so you can stand the
-whole thing up — including real pgvector similarity search inside PostgreSQL — and
-watch data move end to end. Both are designed to be swapped for an LLM later; see
+**Most of it runs entirely offline.** No API keys, no model downloads. The embedder is a
+deterministic hashing embedder and the generic extractor is rule-based, so you can stand
+the whole thing up — including real pgvector similarity search inside PostgreSQL — and
+watch data move end to end without any credentials. The one real extraction path that
+matters for the actual product, `POST /documents/{id}/home-report`, calls Claude and
+needs `ANTHROPIC_API_KEY`; see
 [Going from offline to real models](#going-from-offline-to-real-models).
 
-The one exception is [uploading a PDF](#pdfs), which calls out to Google Document AI
-for OCR. Text uploads, and every stage after ingestion, still need no credentials.
+Uploading a [PDF](#pdfs) also calls out — to Google Document AI for OCR. Text uploads,
+and every stage after ingestion apart from the home report, still need no credentials.
 
 ## Stack
 
@@ -90,23 +99,32 @@ and generate a report, with a banner showing backend and database health.
 
 ### Try it with the sample
 
-`data/samples/quarterly-update.md` is a small operations update with the shape the
-rule-based extractor recognises (`Label: value` lines plus prose with figures). Paste
-it into the UI, or upload it directly:
+`data/samples/sample-inspection-report.md` is a short home inspection report covering
+the six systems ALYF tracks, written in the shape the rule-based extractor also
+recognises (`Label: value` lines plus prose with figures). Paste it into the UI, or
+upload it directly:
 
 ```bash
-curl -F "file=@data/samples/quarterly-update.md" http://localhost:8000/api/v1/documents/upload
+curl -F "file=@data/samples/sample-inspection-report.md" http://localhost:8000/api/v1/documents/upload
 ```
 
-Then extract facts from the returned document id, and ask something like
-*"what happened to revenue?"*
+Then, using the returned document id:
+
+- `POST /documents/{id}/extract` runs the offline, rule-based extractor and lets you
+  ask questions like *"what did the inspector say about the HVAC?"*
+- `POST /documents/{id}/home-report` is the real product path: it sends the document's
+  text to Claude and returns the AI Home Health Report, one entry per system with an
+  age, a condition, findings, and a confidence score per field. Needs
+  `ANTHROPIC_API_KEY` set as a real environment variable — see
+  [Configuration](#configuration).
 
 ### PDFs
 
-`POST /documents/upload` recognises a PDF from its own bytes — not the filename or
-the browser's content type — and sends it to Google Document AI for OCR. Everything
-else must be UTF-8 text, and is rejected with a `415` if it is not. Documents that
-arrive this way are stored with `source_type: "pdf"`.
+In production this is almost always a home inspector's report. `POST /documents/upload`
+recognises a PDF from its own bytes — not the filename or the browser's content type —
+and sends it to Google Document AI for OCR. Everything else must be UTF-8 text, and is
+rejected with a `415` if it is not. Documents that arrive this way are stored with
+`source_type: "pdf"`.
 
 Point `DOCAI_PROCESSOR_ID` at a **Form Parser** processor. A plain Document OCR
 processor returns text alone, and tables are the reason to use OCR at all: Document
@@ -156,6 +174,8 @@ All routes are mounted under `/api/v1`.
 | `DELETE` | `/documents/{id}`               | Delete a document and everything derived from it |
 | `POST`   | `/documents/{id}/extract`       | Extract and embed facts for a document         |
 | `GET`    | `/facts`                        | List extracted facts                           |
+| `POST`   | `/documents/{id}/home-report`   | Generate the AI Home Health Report via Claude  |
+| `GET`    | `/documents/{id}/home-report`   | The most recently generated home report, if any |
 | `POST`   | `/ask`                          | Vector-search facts and compose an answer      |
 | `GET`    | `/insights`                     | List past questions and their answers          |
 | `POST`   | `/reports`                      | Generate a Markdown report for a document      |
@@ -189,10 +209,13 @@ gitignored.
 | `DOCAI_PROJECT_ID`     | —                                                    | Google Cloud project holding the processor     |
 | `DOCAI_LOCATION`       | `us`                                                 | Must match the processor's region              |
 | `DOCAI_PROCESSOR_ID`   | —                                                    | Use a **Form Parser** processor — see [PDFs](#pdfs) |
+| `DOCAI_GCS_BUCKET`     | —                                                    | Only needed for PDFs over Document AI's online limits — see [PDFs](#pdfs) |
 
 Document AI also needs `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service account
-key file. That one is read from the real environment by the Google auth library, not
-from `backend/.env`. Only PDF uploads use any of this.
+key file, and `POST /documents/{id}/home-report` needs `ANTHROPIC_API_KEY`. Both are
+read from the real environment by their respective SDKs, not from `backend/.env` —
+setting them there alone is not enough. Only PDF uploads and the home-report endpoint
+use any of this; everything else needs no credentials.
 
 Chunking is tunable in `backend/app/core/config.py` — `chunk_size_words` (180) and
 `chunk_overlap_words` (30).
@@ -227,17 +250,28 @@ ruff check .
 
 ## Going from offline to real models
 
-Two seams are deliberately naive so the system runs with zero setup. Each is a single
-function, and swapping either leaves persistence, dedupe, and retrieval untouched.
+Extraction already has a real, LLM-backed path — the one the product actually runs on.
+Two other seams are still deliberately naive so the rest of the system runs with zero
+setup, each a single function whose replacement leaves persistence, dedupe, and
+retrieval untouched.
 
+- **Home report extraction** — `backend/app/extraction/home_inspection.py`.
+  `extract_home_systems` sends a document's text to Claude using structured outputs, so
+  the reply always validates against a fixed schema: one entry per home system (roof,
+  HVAC, plumbing, electrical, water heater, foundation), each with an estimated age, a
+  condition, findings, and its own confidence score per field. `POST
+  /documents/{id}/home-report` runs it and persists the result to
+  `home_system_records`, replacing any earlier run for that document. This is the path
+  the actual product uses; it needs `ANTHROPIC_API_KEY`.
+- **Rule-based extraction** — `backend/app/extraction/service.py`. `extract_candidates`
+  uses regex to find `Label: value` pairs and figures in prose, with no model call at
+  all. This is what `POST /documents/{id}/extract` still runs, kept for the offline
+  demo path described above rather than for the home-report product itself.
 - **Embeddings** — `backend/app/core/embeddings.py`. `embed_text` hashes tokens and
   word pairs into a unit-length vector. It is deterministic but not semantically
   meaningful: similarity reflects shared wording, not shared meaning. Replace the body
   with a provider call, set `EMBEDDING_DIMENSIONS` to that model's dimension, and
   recreate the `facts` table (the vector column is fixed-width).
-- **Extraction** — `backend/app/extraction/service.py`. `extract_candidates` uses
-  regex to find `Label: value` pairs and figures in prose. Replace it with an LLM call
-  returning the same candidate shape.
 - **Answer composition** — `backend/app/reasoning/service.py`. Retrieval is already
   real pgvector search (`cosine_distance` compiles to the `<=>` operator and runs in
   PostgreSQL). Only `compose_answer` is extractive — it quotes retrieved facts rather

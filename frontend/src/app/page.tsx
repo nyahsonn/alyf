@@ -8,32 +8,47 @@ import {
   type DbHealth,
   type Document,
   type Fact,
+  type HomeReport,
   type Report,
 } from "@/lib/api";
 
-const SAMPLE_TEXT = `Quarter: Q3 2026
-Owner: Priya Raman
+const SYSTEM_LABELS: Record<string, string> = {
+  roof: "Roof",
+  hvac: "HVAC",
+  plumbing: "Plumbing",
+  electrical: "Electrical",
+  water_heater: "Water heater",
+  foundation: "Foundation",
+};
 
-Revenue reached $4.2M this quarter, up 18% from Q2. The team closed 27 new
-accounts, the highest count in company history. Churn fell to 1.4% monthly.
+const SAMPLE_TEXT = `Property: 482 Birchwood Lane
+Inspection Date: 2026-08-01
 
-Headcount: 32
-Open roles: 5
+Roof: Asphalt shingle, installed in 2016 (approximately 10 years old). Minor
+granule loss was observed on the south-facing slope. No active leaks or soft
+spots were found. Condition: Good.
 
-Infrastructure costs grew 24% quarter over quarter, faster than revenue. The
-largest driver was vector index storage, which now accounts for 31% of the bill.`;
+HVAC: Central forced-air system, unit manufactured in 2010. The air filter
+was heavily soiled and should be replaced immediately. The furnace
+short-cycled once during testing -- recommend servicing before the next
+heating season. Condition: Fair.
+
+Foundation: Poured concrete. A hairline crack was observed along the north
+wall; it appears cosmetic rather than structural, with no signs of water
+intrusion. Condition: Good.`;
 
 export default function Home() {
   const [health, setHealth] = useState<DbHealth | null>(null);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [facts, setFacts] = useState<Fact[]>([]);
+  const [homeReport, setHomeReport] = useState<HomeReport | null>(null);
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [report, setReport] = useState<Report | null>(null);
 
-  const [title, setTitle] = useState("Q3 Operations Update");
+  const [title, setTitle] = useState("482 Birchwood Lane — Inspection");
   const [content, setContent] = useState(SAMPLE_TEXT);
-  const [question, setQuestion] = useState("What drove costs up?");
+  const [question, setQuestion] = useState("What did the inspector say about the HVAC?");
 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +93,12 @@ export default function Home() {
       setSelectedId(documentId);
       setAnswer(null);
       setReport(null);
-      setFacts(await api.listFacts(documentId));
+      const [documentFacts, existingHomeReport] = await Promise.all([
+        api.listFacts(documentId),
+        api.getHomeReport(documentId),
+      ]);
+      setFacts(documentFacts);
+      setHomeReport(existingHomeReport);
     });
 
   const handleIngest = () =>
@@ -87,6 +107,7 @@ export default function Home() {
       await refreshDocuments();
       setSelectedId(document.id);
       setFacts([]);
+      setHomeReport(null);
       setAnswer(null);
       setReport(null);
     });
@@ -97,6 +118,7 @@ export default function Home() {
       await refreshDocuments();
       setSelectedId(document.id);
       setFacts([]);
+      setHomeReport(null);
       setAnswer(null);
       setReport(null);
     });
@@ -107,6 +129,12 @@ export default function Home() {
       const result = await api.extract(selectedId);
       setFacts(result.facts);
       await refreshDocuments();
+    });
+
+  const handleHomeReport = () =>
+    run("home-report", async () => {
+      if (!selectedId) return;
+      setHomeReport(await api.createHomeReport(selectedId));
     });
 
   const handleAsk = () =>
@@ -132,6 +160,7 @@ export default function Home() {
       if (selectedId === documentId) {
         setSelectedId(null);
         setFacts([]);
+        setHomeReport(null);
         setAnswer(null);
         setReport(null);
       }
@@ -285,7 +314,69 @@ export default function Home() {
                 )}
               </Card>
 
-              <Card title="3 · Reason">
+              <Card title="3 · Home Report">
+                <p className="mb-3 text-sm text-neutral-500">
+                  Send <strong>{selected.title}</strong> to Claude and get
+                  back the AI Home Health Report — one entry per system, each
+                  with an age, a condition, findings, and a confidence score
+                  per field.
+                </p>
+                <Button
+                  onClick={handleHomeReport}
+                  loading={busy === "home-report"}
+                >
+                  {homeReport && homeReport.systems.length > 0
+                    ? "Re-generate home report"
+                    : "Generate home report"}
+                </Button>
+                {homeReport && homeReport.systems.length > 0 && (
+                  <ul className="mt-4 space-y-2">
+                    {homeReport.systems.map((system) => (
+                      <li
+                        key={system.id}
+                        className="rounded-md border border-neutral-200 px-3 py-2 text-xs dark:border-neutral-800"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">
+                            {SYSTEM_LABELS[system.name] ?? system.name}
+                          </span>
+                          <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                            {system.condition}
+                          </span>
+                          <span className="text-neutral-400">
+                            ({system.condition_confidence.toFixed(2)})
+                          </span>
+                          <span className="ml-auto text-neutral-500">
+                            {system.estimated_age_years !== null
+                              ? `${system.estimated_age_years} yrs`
+                              : "age unknown"}{" "}
+                            <span className="text-neutral-400">
+                              ({system.estimated_age_confidence.toFixed(2)})
+                            </span>
+                          </span>
+                        </div>
+                        {system.findings.length > 0 ? (
+                          <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-neutral-600 dark:text-neutral-400">
+                            {system.findings.map((finding, index) => (
+                              <li key={index}>{finding}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-1.5 text-neutral-400">
+                            No findings noted.
+                          </p>
+                        )}
+                        <p className="mt-1 text-[10px] text-neutral-400">
+                          findings confidence{" "}
+                          {system.findings_confidence.toFixed(2)}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+
+              <Card title="4 · Reason">
                 <div className="flex gap-2">
                   <input
                     value={question}
@@ -324,7 +415,7 @@ export default function Home() {
                 )}
               </Card>
 
-              <Card title="4 · Report">
+              <Card title="5 · Report">
                 <Button onClick={handleReport} loading={busy === "report"}>
                   Generate report
                 </Button>

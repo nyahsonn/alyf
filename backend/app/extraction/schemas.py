@@ -23,3 +23,23 @@ class ExtractionResult(BaseModel):
     document_id: uuid.UUID
     facts_created: int
     facts: list[FactRead]
+
+
+class HomeSystemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    document_id: uuid.UUID
+    name: str
+    estimated_age_years: int | None
+    estimated_age_confidence: float
+    condition: str
+    condition_confidence: float
+    findings: list[str]
+    findings_confidence: float
+    created_at: datetime
+
+
+class HomeReportResult(BaseModel):
+    document_id: uuid.UUID
+    systems: list[HomeSystemRead]

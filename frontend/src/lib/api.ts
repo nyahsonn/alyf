@@ -37,6 +37,24 @@ export type ExtractionResult = {
   facts: Fact[];
 };
 
+export type HomeSystem = {
+  id: string;
+  document_id: string;
+  name: string;
+  estimated_age_years: number | null;
+  estimated_age_confidence: number;
+  condition: string;
+  condition_confidence: number;
+  findings: string[];
+  findings_confidence: number;
+  created_at: string;
+};
+
+export type HomeReport = {
+  document_id: string;
+  systems: HomeSystem[];
+};
+
 export type EvidenceItem = {
   fact_id: string;
   document_id: string;
@@ -149,6 +167,14 @@ export const api = {
 
   listFacts: (documentId: string) =>
     request<Fact[]>(`/facts?document_id=${documentId}`),
+
+  createHomeReport: (documentId: string) =>
+    request<HomeReport>(`/documents/${documentId}/home-report`, {
+      method: "POST",
+    }),
+
+  getHomeReport: (documentId: string) =>
+    request<HomeReport>(`/documents/${documentId}/home-report`),
 
   ask: (input: { question: string; document_id?: string; top_k?: number }) =>
     request<Answer>("/ask", { method: "POST", body: JSON.stringify(input) }),
