@@ -40,15 +40,20 @@ nothing about this system's condition.
 system, as short standalone strings. Empty list if none are raised.
 
 Give every field its own confidence score from 0.0 to 1.0, reflecting how directly the \
-report text supports that value -- not how confident you are that the system exists. A \
-value read verbatim from the text should score near 1.0; a value you had to infer, or \
-that the report never addressed, should score low. Do not guess to fill a value the \
-report doesn't support -- use null / not_mentioned / an empty list instead, with a low \
-confidence score.
+report text supports that value -- not how confident you are that the system exists or \
+that it was correctly left out of the report. A value read verbatim from the text, or \
+directly computed from a fact the text states (e.g. an age computed from a stated \
+install year against the report date), scores near 1.0. Do not guess to fill a value \
+the report doesn't support -- use null / not_mentioned / an empty list instead.
+
+If a system is not mentioned anywhere in the report, set confidence to exactly 0.0 for \
+all three of its fields (estimated_age, condition, findings). 0.0 means "there is \
+nothing here to go on -- this needs to be checked in person," not "we're confident it \
+was correctly omitted." Never score an unmentioned system's fields above 0.0.
 
 Report on all six systems even when a system is never mentioned in the text -- for an \
-unmentioned system, use null / not_mentioned / an empty list with low confidence rather \
-than omitting the system from the output."""
+unmentioned system, use null / not_mentioned / an empty list, each with confidence 0.0, \
+rather than omitting the system from the output."""
 
 
 class ExtractionError(RuntimeError):
