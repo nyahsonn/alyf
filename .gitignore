@@ -30,8 +30,10 @@ out/
 # Claude Code local settings
 .claude/settings.local.json
 
-# Local sample PDFs used for manual OCR testing
+# Local sample PDFs used for manual OCR testing, and data derived from them
 tests-reports/
+data/extraction_cache/
+data/ground_truth.csv
 
 # Editors / OS
 .vscode/
