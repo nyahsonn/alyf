@@ -403,7 +403,7 @@ def _build_result(documents: list[documentai.Document]) -> OcrResult:
         page_count=sum(len(document.pages) for document in documents),
         tables=[table for document in documents for table in _read_tables(document)],
         prose="\n\n".join(
-            outside for document in documents if (outside := _text_outside_tables(document))
+            prose for document in documents if (prose := _build_prose(document))
         ),
     )
 
@@ -425,48 +425,221 @@ def _read_tables(document: documentai.Document) -> list[Table]:
     return tables
 
 
-def _text_outside_tables(document: documentai.Document) -> str:
-    """Everything on the page that is not part of a table.
+# Selection marks Document AI embeds inline in `document.text` (e.g. "☑
+# Natural gas") are usually reliable, but empirically not for one specific
+# layout: a single text label preceded by two or more unlabeled checkboxes
+# for different items/units (e.g. "☐ ☐ ☐ Unsafe Flue angle
+# down" -- a per-unit A/B/C selection). For that shape, `document.text`
+# sometimes drops every mark on the row and sometimes keeps a mark in the
+# wrong state; the label itself always survives, since normal OCR is what
+# recognizes it as running text -- the marks do not reliably make it into
+# that same text stream at all.
+#
+# Document AI's vision-level detector (`page.visual_elements`, type
+# "filled_checkbox" / "unfilled_checkbox") finds these same marks even when
+# the text stream drops them, but reports each as a bare glyph with a
+# bounding box and no attached label. `page.form_fields`, which does try to
+# pair a mark with its nearest label, was checked against this exact layout
+# and is *wrong* more often than the (already unreliable) inline text: it
+# defaults to "unfilled_checkbox" almost regardless of the true state, which
+# would trade false positives for silently dropped real findings.
+#
+# So the fix is geometric: match each checkbox visual element to the text
+# line it sits on (same normalized y-band) rather than trusting either of
+# Document AI's own attempts at that pairing. A line matched to two or more
+# checkboxes is corrected in place -- overwriting whatever marks, if any,
+# Document AI's own text recognition put there, since this project has never
+# found the inline text trustworthy for that specific shape. A line matched
+# to zero or one checkbox is left untouched: a single checkbox immediately
+# before its own label is the common case, and already comes through the
+# text stream correctly.
+#
+# Corrections are anchored to each line's own text_anchor span and applied by
+# offset, in the same pass as cutting table regions -- never by searching for
+# a line's text in a string. Report templates reuse identical short labels
+# ("Appears Serviceable", "Comments", ...) across dozens of lines, only some
+# of which need correction; a content-based search-and-replace was tried
+# first and confirmed (on real report data) to sometimes edit the wrong
+# occurrence of a repeated label instead of the one it was computed for.
+_CHECKBOX_VISUAL_TYPES = {"filled_checkbox", "unfilled_checkbox"}
+_CHECKBOX_GLYPHS = {"filled_checkbox": "☑", "unfilled_checkbox": "☐"}
 
-    Each table's own layout anchor gives the span it occupies in `document.text`,
-    so the regions are cut by offset rather than by matching cell strings back
-    against the text -- a cell reading "Revenue" would otherwise take a paragraph
-    line of the same text with it.
+# A run of one or more checkbox glyphs (with optional spacing) at the start
+# of a line -- stripped before re-prefixing with geometry-resolved marks, so
+# a corrected line is never double-marked.
+_LEADING_CHECKBOX_RUN_RE = re.compile(r"^(?:[☐☑☒]\s*)+")
+
+# A line whose entire text is checkbox glyphs and nothing else -- Document AI
+# sometimes recognizes an isolated checkbox as its own line rather than
+# folding it into the adjacent label's line. Such a line carries no label of
+# its own, but it can still sit close enough to a real label line to win a
+# checkbox's nearest-line match instead of that label -- excluded from the
+# candidate lines below so it can never steal a match meant for its neighbor.
+_CHECKBOX_ONLY_LINE_RE = re.compile(r"^[☐☑☒\s]+$")
+
+
+def _bbox_y_range(layout: documentai.Document.Page.Layout) -> tuple[float, float] | None:
+    ys = [v.y for v in layout.bounding_poly.normalized_vertices]
+    return (min(ys), max(ys)) if ys else None
+
+
+def _bbox_x_center(layout: documentai.Document.Page.Layout) -> float | None:
+    xs = [v.x for v in layout.bounding_poly.normalized_vertices]
+    return (min(xs) + max(xs)) / 2 if xs else None
+
+
+# A checkbox with no line within this many normalized-page units of it (in
+# y) is treated as unmatched rather than forced onto the nearest one anyway
+# -- roughly one and a half line-heights on a typical page, loose enough for
+# ordinary layout jitter, tight enough that a checkbox on a genuinely
+# different part of the page cannot get pulled onto a distant line.
+_MAX_CHECKBOX_LINE_DISTANCE = 0.02
+
+
+def _checkbox_line_corrections(document: documentai.Document) -> list[tuple[int, int, str]]:
+    """(start, end, replacement) edits, by offset into `document.text`, for
+    lines whose checkbox marks need correcting -- see the module comment
+    above `_CHECKBOX_VISUAL_TYPES`.
     """
-    spans = [
-        (int(segment.start_index), int(segment.end_index))
-        for page in document.pages
-        for table in page.tables
-        for segment in table.layout.text_anchor.text_segments
-    ]
-    return _remove_spans(document.text, spans)
+    edits: list[tuple[int, int, str]] = []
+
+    for page in document.pages:
+        checkboxes = [ve for ve in page.visual_elements if ve.type_ in _CHECKBOX_VISUAL_TYPES]
+        if not checkboxes:
+            continue
+
+        lines: list[tuple[int, int, float]] = []
+        for line in page.lines:
+            segments = list(line.layout.text_anchor.text_segments)
+            if len(segments) != 1:
+                continue  # A wrapped/multi-segment line has no single span to replace; left as Document AI wrote it.
+            start, end = int(segments[0].start_index), int(segments[0].end_index)
+            if start >= end:
+                continue
+            if _CHECKBOX_ONLY_LINE_RE.match(document.text[start:end]):
+                continue  # See _CHECKBOX_ONLY_LINE_RE: not a label, must not compete with its neighbor for matches.
+            line_y = _bbox_y_range(line.layout)
+            if line_y is None:
+                continue
+            lines.append((start, end, sum(line_y) / 2))
+        if not lines:
+            continue
+
+        # Each checkbox is assigned to the single nearest line by y-center,
+        # not to every line within a tolerance band -- rows in some report
+        # templates are packed close enough that a generous per-line band
+        # matches a checkbox that actually belongs to the row above or
+        # below, corrupting both rows' resolved marks. Nearest-line
+        # assignment partitions the page at the midpoint between adjacent
+        # rows instead, which held up against real report data where the
+        # tolerance-band approach did not.
+        matches_by_line: dict[int, list[tuple[float, str]]] = {}
+        for checkbox in checkboxes:
+            checkbox_y = _bbox_y_range(checkbox.layout)
+            x_center = _bbox_x_center(checkbox.layout)
+            if checkbox_y is None or x_center is None:
+                continue
+            y_center = sum(checkbox_y) / 2
+            nearest_index, distance = min(
+                ((i, abs(y_center - line_y)) for i, (_, _, line_y) in enumerate(lines)),
+                key=lambda pair: pair[1],
+            )
+            if distance > _MAX_CHECKBOX_LINE_DISTANCE:
+                continue
+            matches_by_line.setdefault(nearest_index, []).append((x_center, checkbox.type_))
+
+        for index, matches in matches_by_line.items():
+            if len(matches) < 2:
+                continue  # A single checkbox on its own line already comes through correctly.
+            start, end, _ = lines[index]
+            matches.sort()
+            marks = "".join(f"{_CHECKBOX_GLYPHS[kind]} " for _, kind in matches)
+            original = document.text[start:end]
+            corrected = marks + _LEADING_CHECKBOX_RUN_RE.sub("", original)
+            if corrected != original:
+                edits.append((start, end, corrected))
+
+    return edits
 
 
-def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
-    """Cut half-open [start, end) ranges out of text, tidying what is left.
+def _merge_spans(spans: list[tuple[int, int]]) -> list[list[int]]:
+    """Sort and merge overlapping/nested half-open [start, end) spans.
 
-    Spans are merged first: they can overlap or nest, and cutting them one at a
-    time would shift every offset that follows.
+    Spans returned by Document AI (a table's layout, say) can overlap or
+    nest; cutting or replacing them one at a time in the original order would
+    shift every offset that follows.
     """
-    if not spans:
-        return text.strip()
-
     merged: list[list[int]] = []
     for start, end in sorted(spans):
         if merged and start <= merged[-1][1]:
             merged[-1][1] = max(merged[-1][1], end)
         else:
             merged.append([start, end])
+    return merged
+
+
+def _remove_spans(text: str, spans: list[tuple[int, int]]) -> str:
+    """Cut half-open [start, end) ranges out of text, tidying what is left."""
+    if not spans:
+        return text.strip()
 
     kept: list[str] = []
     cursor = 0
-    for start, end in merged:
+    for start, end in _merge_spans(spans):
         kept.append(text[cursor:start])
         cursor = end
     kept.append(text[cursor:])
 
     # Removing a block from the middle leaves the blank lines that surrounded it
     # stacked together.
+    return _BLANK_LINES_RE.sub("\n\n", "".join(kept)).strip()
+
+
+def _build_prose(document: documentai.Document) -> str:
+    """Everything on the page that is not part of a table, with ambiguous
+    checkbox lines corrected -- see `_checkbox_line_corrections` and the
+    module comment above `_CHECKBOX_VISUAL_TYPES`.
+
+    Each table's own layout anchor gives the span it occupies in
+    `document.text`, so table regions are cut by offset rather than by
+    matching cell strings back against the text -- a cell reading "Revenue"
+    would otherwise take a paragraph line of the same text with it. Checkbox
+    corrections are applied in the same offset-based pass, so the two kinds
+    of edit can never disagree about what shifted where.
+    """
+    table_spans = [
+        (int(segment.start_index), int(segment.end_index))
+        for page in document.pages
+        for table in page.tables
+        for segment in table.layout.text_anchor.text_segments
+    ]
+    removals = _merge_spans(table_spans)
+
+    def _overlaps_a_removal(start: int, end: int) -> bool:
+        return any(r_start < end and start < r_end for r_start, r_end in removals)
+
+    edits: list[tuple[int, int, str]] = [(start, end, "") for start, end in removals]
+    edits += [
+        (start, end, replacement)
+        for start, end, replacement in _checkbox_line_corrections(document)
+        # A correction inside a span already being cut for a table is
+        # redundant -- that text is discarded either way -- and keeping it
+        # would risk two edits overlapping in the pass below.
+        if not _overlaps_a_removal(start, end)
+    ]
+    edits.sort()
+
+    text = document.text
+    kept: list[str] = []
+    cursor = 0
+    for start, end, replacement in edits:
+        if start < cursor:
+            continue  # Two edits should never overlap once table spans are pre-merged and checkbox edits are filtered against them; skip defensively rather than risk corrupting output if one slips through.
+        kept.append(text[cursor:start])
+        kept.append(replacement)
+        cursor = end
+    kept.append(text[cursor:])
+
     return _BLANK_LINES_RE.sub("\n\n", "".join(kept)).strip()
 
 

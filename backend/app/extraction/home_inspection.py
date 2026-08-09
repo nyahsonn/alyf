@@ -32,12 +32,36 @@ SYSTEM_PROMPT = f"""You are reading a home inspection report and pulling out wha
 about six systems: {", ".join(SYSTEM_NAMES)}.
 
 For each of the six systems, report:
-- estimated_age: the age in years if the report states or clearly implies it (e.g. \
-"installed in 2015" against a 2026 report date), otherwise null.
+- estimated_age: the age in years if the report states or clearly implies it for that \
+specific system (e.g. "installed in 2015" against a 2026 report date), otherwise null. \
+A report's overall "estimated age of building" or construction year describes the \
+property, not any one system -- never use it to compute a system's age unless the \
+report explicitly says that system is original to the house or otherwise ties its age \
+to the building's. Most systems (roof, HVAC, water heater) get replaced independently \
+of the building, so their age is null far more often than the building's age is.
 - condition: one of excellent, good, fair, poor, or not_mentioned if the report says \
-nothing about this system's condition.
+nothing about this system's condition. When the report uses its own condition/severity \
+labels (e.g. "Deferred Maintenance", "Safety Concern", "Defect", "Functional"), map \
+every occurrence of the same label to the same one of excellent/good/fair/poor \
+throughout your output -- do not map one system's "Deferred Maintenance" to fair and \
+another system's to good.
 - findings: every specific issue, defect, or recommendation the report raises for this \
-system, as short standalone strings. Empty list if none are raised.
+system, as short standalone strings. Empty list if none are raised. Attribute a finding \
+by what it is substantively about, not by which section heading it happens to sit under \
+or which system's name it shares a keyword with. Reports routinely put genuinely \
+relevant content in an unexpected place -- a retaining wall, a sunroom missing a \
+required foundation, or drainage graded toward the foundation is a foundation finding \
+even when it is printed under an exterior/patio/grading heading, not a "foundation" \
+heading. Conversely, a cosmetic drywall crack on an interior wall is not a foundation \
+finding just because both mention "cracks" -- that is not substantively about any of \
+the six systems, so it is left out of all of them rather than filed under the \
+closest-sounding one.
+
+Many of these reports mark selections with checkboxes or similar marks (e.g. ☒ vs ☐, a \
+filled vs. empty box, a circled vs. uncircled option). Read the mark itself, not just \
+whether the option's text appears on the page -- only a checked/marked/selected item is \
+something the report is actually asserting. An unchecked box next to a listed concern \
+means that concern was checked for and not found; it is not a finding.
 
 Give every field its own confidence score from 0.0 to 1.0, reflecting how directly the \
 report text supports that value -- not how confident you are that the system exists or \
