@@ -10,7 +10,7 @@ import {
   type Document,
   type HomeReport,
 } from "@/lib/api";
-import { SYSTEM_LABELS, URGENCY_LABELS, formatCostRange } from "@/lib/format";
+import { SYSTEM_LABELS, URGENCY_LABELS, URGENCY_TIERS, formatCostRange } from "@/lib/format";
 
 export default function ReportPage() {
   const params = useParams<{ id: string }>();
@@ -127,33 +127,52 @@ export default function ReportPage() {
       </section>
 
       <section>
-        <h2 className="mb-3 text-sm font-semibold">Action plan</h2>
+        <h2 className="mb-1 text-sm font-semibold">Action plan</h2>
         {actionPlan.items.length === 0 ? (
-          <p className="text-sm text-neutral-500">No action items yet.</p>
+          <p className="mt-2 text-sm text-neutral-500">No action items yet.</p>
         ) : (
-          <ul className="space-y-2">
-            {actionPlan.items.map((item) => (
-              <li
-                key={item.id}
-                className="rounded-md border border-neutral-200 px-3 py-2 text-xs dark:border-neutral-800"
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">
-                    {SYSTEM_LABELS[item.system] ?? item.system}
-                  </span>
-                  <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
-                    {URGENCY_LABELS[item.urgency] ?? item.urgency}
-                  </span>
-                  <span className="ml-auto text-neutral-500">
-                    {formatCostRange(item.cost_low, item.cost_high)}
-                  </span>
-                </div>
-                <p className="mt-1.5 text-neutral-600 dark:text-neutral-400">
-                  {item.recommendation}
-                </p>
-              </li>
-            ))}
-          </ul>
+          <>
+            <p className="mb-4 text-xs text-neutral-500">
+              Prioritized into a 90-day / 2-year / 5-year roadmap, with an
+              estimated cost range per item.
+            </p>
+            <ol className="space-y-6">
+              {URGENCY_TIERS.map((tier, index) => {
+                const items = actionPlan.items.filter((item) => item.urgency === tier);
+                if (items.length === 0) return null;
+                return (
+                  <li key={tier}>
+                    <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-neutral-500 uppercase">
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-neutral-900 text-[10px] font-semibold text-white dark:bg-white dark:text-neutral-900">
+                        {index + 1}
+                      </span>
+                      {URGENCY_LABELS[tier]}
+                    </h3>
+                    <ul className="space-y-2 border-l border-neutral-200 pl-5 dark:border-neutral-800">
+                      {items.map((item) => (
+                        <li
+                          key={item.id}
+                          className="rounded-md border border-neutral-200 px-3 py-2 text-xs dark:border-neutral-800"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium">
+                              {SYSTEM_LABELS[item.system] ?? item.system}
+                            </span>
+                            <span className="ml-auto text-neutral-500">
+                              {formatCostRange(item.cost_low, item.cost_high)}
+                            </span>
+                          </div>
+                          <p className="mt-1.5 text-neutral-600 dark:text-neutral-400">
+                            {item.recommendation}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                );
+              })}
+            </ol>
+          </>
         )}
       </section>
     </main>
