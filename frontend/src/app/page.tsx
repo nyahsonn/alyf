@@ -12,26 +12,7 @@ import {
   type HomeReport,
   type Report,
 } from "@/lib/api";
-
-const SYSTEM_LABELS: Record<string, string> = {
-  roof: "Roof",
-  hvac: "HVAC",
-  plumbing: "Plumbing",
-  electrical: "Electrical",
-  water_heater: "Water heater",
-  foundation: "Foundation",
-};
-
-const URGENCY_LABELS: Record<string, string> = {
-  next_90_days: "Next 90 days",
-  next_2_years: "Next 2 years",
-  next_5_years: "Next 5 years",
-};
-
-function formatCostRange(low: number, high: number): string {
-  const fmt = (value: number) => `$${value.toLocaleString()}`;
-  return low === high ? fmt(low) : `${fmt(low)} – ${fmt(high)}`;
-}
+import { SYSTEM_LABELS, URGENCY_LABELS, formatCostRange } from "@/lib/format";
 
 const SAMPLE_TEXT = `Property: 482 Birchwood Lane
 Inspection Date: 2026-08-01

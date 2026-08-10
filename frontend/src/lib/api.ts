@@ -208,4 +208,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ document_id: documentId }),
     }),
+
+  getDocument: (documentId: string) => request<Document>(`/documents/${documentId}`),
 };
