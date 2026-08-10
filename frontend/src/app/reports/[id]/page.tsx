@@ -109,11 +109,17 @@ export default function ReportPage() {
           AI Home Health Report
         </h1>
         <p className="mt-2 text-sm text-ink-soft">{document.title}</p>
+        <p className="mt-4 text-xs text-ink-faint">
+          Want to know what to budget for and when? The timeline lays out
+          each system&apos;s estimated install date, typical lifespan, and
+          next recommended action in order.
+        </p>
         <Link
           href={`/reports/${document.id}/timeline`}
-          className="mt-3 inline-block text-xs font-medium text-accent underline underline-offset-2"
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-3.5 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent hover:text-accent-ink"
         >
-          View system timeline →
+          View system timeline
+          <span aria-hidden="true">→</span>
         </Link>
       </header>
 
