@@ -66,10 +66,10 @@ export default function UploadPage() {
   const stageCopy = stage !== "idle" && stage !== "error" ? STAGE_COPY[stage] : null;
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 py-10">
-      <header className="mb-8 text-center">
-        <h1 className="text-3xl font-semibold tracking-tight">ALYF</h1>
-        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 py-14">
+      <header className="mb-10 text-center">
+        <h1 className="font-display text-4xl font-medium tracking-tight italic">ALYF</h1>
+        <p className="mt-2 text-sm text-ink-soft">
           Upload an inspection PDF to get your AI Home Health Report.
         </p>
       </header>
@@ -77,7 +77,7 @@ export default function UploadPage() {
       {error && (
         <div
           role="alert"
-          className="mb-6 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/50 dark:text-red-200"
+          className="mb-6 rounded-2xl border border-brick/20 bg-brick-soft px-5 py-4 text-sm text-brick"
         >
           {error}
           <button
@@ -106,11 +106,9 @@ export default function UploadPage() {
         onClick={() => {
           if (!busy) fileInput.current?.click();
         }}
-        className={`flex min-h-64 flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
-          busy
-            ? "cursor-default border-neutral-200 dark:border-neutral-800"
-            : "cursor-pointer border-neutral-300 hover:border-neutral-400 dark:border-neutral-700 dark:hover:border-neutral-500"
-        } ${isDragging ? "border-neutral-900 bg-neutral-50 dark:border-white dark:bg-neutral-900" : ""}`}
+        className={`flex min-h-64 flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
+          busy ? "cursor-default border-line" : "cursor-pointer border-line-strong hover:border-accent"
+        } ${isDragging ? "border-accent bg-accent-soft" : ""}`}
       >
         <input
           ref={fileInput}
@@ -126,15 +124,15 @@ export default function UploadPage() {
 
         {!busy ? (
           <>
-            <p className="text-sm font-medium">Drag and drop your inspection PDF here</p>
-            <p className="mt-1 text-xs text-neutral-500">or click to browse</p>
+            <p className="text-sm font-medium text-ink">Drag and drop your inspection PDF here</p>
+            <p className="mt-1 text-xs text-ink-faint">or click to browse</p>
           </>
         ) : (
           <div className="w-full max-w-sm">
-            <p className="text-sm font-medium">{stageCopy?.label}</p>
-            <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
+            <p className="text-sm font-medium text-ink">{stageCopy?.label}</p>
+            <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-surface-sunk">
               <div
-                className="h-full rounded-full bg-neutral-900 transition-all duration-500 dark:bg-white"
+                className="h-full rounded-full bg-accent transition-all duration-500"
                 style={{ width: `${progress}%` }}
               />
             </div>

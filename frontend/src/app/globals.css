@@ -1,26 +1,80 @@
 @import "tailwindcss";
 
+/*
+ * "Blueprint Ledger" — see the visual identity proposal.
+ * One accent (a Prussian-blue-derived ink, drawn from the pigment
+ * architectural blueprints were printed in) plus a separate semantic trio
+ * for condition/urgency. The accent inverts to a lifted cyanotype blue in
+ * dark mode -- literally how a real blueprint print looks.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --paper: #f5f7f7;
+  --surface: #ffffff;
+  --surface-sunk: #eef2f2;
+  --ink: #12191d;
+  --ink-soft: #57666c;
+  --ink-faint: #8a969a;
+  --line: #dce3e3;
+  --line-strong: #c3cdcd;
+  --accent: #1c4e66;
+  --accent-soft: #e4ecef;
+  --accent-ink: #ffffff;
+  --sage: #3f7a5a;
+  --sage-soft: #e4efe8;
+  --ochre: #9a6a24;
+  --ochre-soft: #f5e9d8;
+  --brick: #a83f34;
+  --brick-soft: #f5e1de;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-fraunces);
+
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-sunk: var(--surface-sunk);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-sage: var(--sage);
+  --color-sage-soft: var(--sage-soft);
+  --color-ochre: var(--ochre);
+  --color-ochre-soft: var(--ochre-soft);
+  --color-brick: var(--brick);
+  --color-brick-soft: var(--brick-soft);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --paper: #10161a;
+    --surface: #161d21;
+    --surface-sunk: #0d1215;
+    --ink: #edf1f0;
+    --ink-soft: #93a3a8;
+    --ink-faint: #5e6c70;
+    --line: #253238;
+    --line-strong: #34434a;
+    --accent: #74b8da;
+    --accent-soft: #1c3540;
+    --accent-ink: #0b1418;
+    --sage: #74c497;
+    --sage-soft: #1e3a2b;
+    --ochre: #e3ac5c;
+    --ochre-soft: #3a2e18;
+    --brick: #e0897d;
+    --brick-soft: #3a2220;
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--paper);
+  color: var(--ink);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }

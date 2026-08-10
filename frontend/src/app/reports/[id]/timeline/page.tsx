@@ -58,8 +58,8 @@ export default function TimelinePage() {
   if (error) {
     return (
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
-        <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
-        <Link href="/upload" className="mt-4 text-sm font-medium underline underline-offset-2">
+        <p className="text-sm text-brick">{error}</p>
+        <Link href="/upload" className="mt-4 text-sm font-medium text-accent underline underline-offset-2">
           Upload another report
         </Link>
       </main>
@@ -69,7 +69,7 @@ export default function TimelinePage() {
   if (!document || !homeReport || !actionPlan) {
     return (
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">Loading your timeline…</p>
+        <p className="text-sm text-ink-soft">Loading your timeline…</p>
       </main>
     );
   }
@@ -96,18 +96,18 @@ export default function TimelinePage() {
     });
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-6 py-10">
+    <main className="mx-auto w-full max-w-3xl px-6 py-14">
       <Link
         href={`/reports/${document.id}`}
-        className="text-xs font-medium text-neutral-500 underline underline-offset-2 hover:text-neutral-700 dark:hover:text-neutral-300"
+        className="text-xs font-medium text-ink-faint underline underline-offset-2 hover:text-ink"
       >
         ← Back to report
       </Link>
 
-      <header className="mt-4 mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">System timeline</h1>
-        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">{document.title}</p>
-        <p className="mt-3 text-xs text-neutral-500 dark:text-neutral-400">
+      <header className="mt-5 mb-12">
+        <h1 className="font-display text-3xl font-medium tracking-tight">System timeline</h1>
+        <p className="mt-2 text-sm text-ink-soft">{document.title}</p>
+        <p className="mt-4 text-xs text-ink-faint">
           Install years and remaining life below are calculated, not measured: install year is
           back-dated from the report&apos;s estimated system age, and lifespan uses typical
           industry ranges for that type of system — not an assessment of this specific unit.
@@ -115,9 +115,9 @@ export default function TimelinePage() {
       </header>
 
       {entries.length === 0 ? (
-        <p className="text-sm text-neutral-500">No systems found.</p>
+        <p className="text-sm text-ink-soft">No systems found.</p>
       ) : (
-        <ol className="space-y-6 border-l border-neutral-200 pl-5 dark:border-neutral-800">
+        <ol className="space-y-8 border-l border-line pl-6">
           {entries.map(({ system, installYear, action }) => {
             const lifespan = TYPICAL_LIFESPAN_YEARS[system.name];
             const remaining =
@@ -127,42 +127,50 @@ export default function TimelinePage() {
 
             return (
               <li key={system.id} className="relative">
-                <span className="absolute top-1 -left-[26px] h-2.5 w-2.5 rounded-full bg-neutral-900 dark:bg-white" />
-                <div className="rounded-md border border-neutral-200 px-3 py-2 text-xs dark:border-neutral-800">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{SYSTEM_LABELS[system.name] ?? system.name}</span>
-                    <span className="text-neutral-500">
+                <span className="absolute top-1.5 -left-[29px] h-3 w-3 rounded-full border-2 border-paper bg-accent" />
+                <div className="rounded-2xl border border-line bg-surface px-6 py-5 text-sm">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="font-medium text-ink">
+                      {SYSTEM_LABELS[system.name] ?? system.name}
+                    </span>
+                    <span className="font-mono text-xs tabular-nums text-ink-faint">
                       {installYear !== null
                         ? `installed ~${installYear} (${system.estimated_age_years} yrs old)`
                         : "install year unknown"}
                     </span>
                   </div>
 
-                  <p className="mt-1.5 text-neutral-600 dark:text-neutral-400">
+                  <p className="mt-3 text-[13.5px] leading-relaxed text-ink-soft">
                     Typical lifespan for this system type:{" "}
-                    {lifespan ? `${lifespan[0]}–${lifespan[1]} yrs` : "no reference range available"}
+                    <span className="font-mono tabular-nums">
+                      {lifespan ? `${lifespan[0]}–${lifespan[1]} yrs` : "no reference range available"}
+                    </span>
                     {remaining &&
                       (remaining[1] > 0
                         ? ` — roughly ${Math.max(remaining[0], 0)}–${remaining[1]} yrs of typical life left (estimate)`
                         : " — already past the typical range for this system type (estimate)")}
                   </p>
 
-                  <p className="mt-1.5 text-neutral-600 dark:text-neutral-400">
-                    <span className="font-medium text-neutral-700 dark:text-neutral-300">
-                      Next recommended action:
-                    </span>{" "}
-                    {action ? (
-                      <>
-                        {action.recommendation}{" "}
-                        <span className="text-neutral-400">
-                          ({URGENCY_LABELS[action.urgency] ?? action.urgency},{" "}
-                          {formatCostRange(action.cost_low, action.cost_high)})
-                        </span>
-                      </>
-                    ) : (
-                      "none at this time"
-                    )}
-                  </p>
+                  <div className="mt-4 border-t border-dashed border-line pt-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] font-semibold tracking-wide text-ink-faint uppercase">
+                        Next action
+                      </span>
+                      {action && (
+                        <>
+                          <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-[11px] font-semibold text-accent">
+                            {URGENCY_LABELS[action.urgency] ?? action.urgency}
+                          </span>
+                          <span className="ml-auto font-mono text-xs font-semibold tabular-nums text-accent">
+                            {formatCostRange(action.cost_low, action.cost_high)}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    <p className={`mt-2 text-[13.5px] leading-relaxed ${action ? "text-ink" : "text-ink-faint"}`}>
+                      {action ? action.recommendation : "None at this time."}
+                    </p>
+                  </div>
                 </div>
               </li>
             );

@@ -31,6 +31,26 @@ export const TYPICAL_LIFESPAN_YEARS: Record<string, [number, number]> = {
   foundation: [80, 100],
 };
 
+// Semantic tone per system condition -- kept separate from the accent color
+// (see the visual identity proposal). Tailwind class strings are written out
+// in full so the compiler's content scan picks them up.
+export const CONDITION_TONE: Record<string, { pill: string; fill: string }> = {
+  excellent: { pill: "bg-sage-soft text-sage", fill: "bg-sage" },
+  good: { pill: "bg-sage-soft text-sage", fill: "bg-sage" },
+  fair: { pill: "bg-ochre-soft text-ochre", fill: "bg-ochre" },
+  poor: { pill: "bg-brick-soft text-brick", fill: "bg-brick" },
+  not_mentioned: { pill: "bg-surface-sunk text-ink-faint", fill: "bg-ink-faint" },
+};
+
+// A bare decimal ("0.60") asks a homeowner to have an intuition for what
+// counts as high or low. A word doesn't -- the raw number stays available
+// via a tooltip for anyone who wants it (see ConfidenceGauge).
+export function confidenceLabel(value: number): "High" | "Medium" | "Low" {
+  if (value >= 0.75) return "High";
+  if (value >= 0.5) return "Medium";
+  return "Low";
+}
+
 export function formatCostRange(low: number, high: number): string {
   const fmt = (value: number) => `$${value.toLocaleString()}`;
   return low === high ? fmt(low) : `${fmt(low)} – ${fmt(high)}`;
