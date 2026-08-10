@@ -79,6 +79,12 @@ export default function ReportPage() {
         <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
           {document.title}
         </p>
+        <Link
+          href={`/reports/${document.id}/timeline`}
+          className="mt-2 inline-block text-xs font-medium underline underline-offset-2"
+        >
+          View system timeline →
+        </Link>
       </header>
 
       <section className="mb-8">
