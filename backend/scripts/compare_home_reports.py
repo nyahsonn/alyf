@@ -109,12 +109,22 @@ def value_confidence_conflicts(system: HomeSystem) -> list[str]:
     return conflicts
 
 
+def format_address(report: HomeInspectionReport) -> str:
+    address = report.address
+    value = address.address if address.address is not None else "(not stated)"
+    return f"{value} ({address.confidence:.2f})"
+
+
 def print_summary_table(names: list[str], reports: dict[str, HomeInspectionReport]) -> None:
     col_width = max(20, max(len(name) for name in names) + 2)
     label_width = 12
 
     def row(label: str, cells: list[str]) -> str:
         return label.ljust(label_width) + "".join(cell.ljust(col_width) for cell in cells)
+
+    print("\n=== ADDRESS ===")
+    print(row("", names))
+    print(row("address", [format_address(reports[name]) for name in names]))
 
     for system_name in SYSTEM_NAMES:
         print(f"\n=== {system_name.upper()} ===")
