@@ -210,12 +210,14 @@ gitignored.
 | `DOCAI_LOCATION`       | `us`                                                 | Must match the processor's region              |
 | `DOCAI_PROCESSOR_ID`   | —                                                    | Use a **Form Parser** processor — see [PDFs](#pdfs) |
 | `DOCAI_GCS_BUCKET`     | —                                                    | Only needed for PDFs over Document AI's online limits — see [PDFs](#pdfs) |
+| `ANTHROPIC_API_KEY`    | —                                                    | Needed by `POST /documents/{id}/home-report` and `.../action-plan` |
 
 Document AI also needs `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service account
-key file, and `POST /documents/{id}/home-report` needs `ANTHROPIC_API_KEY`. Both are
-read from the real environment by their respective SDKs, not from `backend/.env` —
-setting them there alone is not enough. Only PDF uploads and the home-report endpoint
-use any of this; everything else needs no credentials.
+key file. That one is read from the real environment by the Google auth library, not
+from `backend/.env` — setting it there alone is not enough. `ANTHROPIC_API_KEY` works either way: set it in `backend/.env` for local dev, or as a
+real environment variable in deployments that don't ship a `.env` file — `backend/.env`
+wins if both happen to be set. Only PDF uploads and the home-report/action-plan
+endpoints use any of this; everything else needs no credentials.
 
 Chunking is tunable in `backend/app/core/config.py` — `chunk_size_words` (180) and
 `chunk_overlap_words` (30).

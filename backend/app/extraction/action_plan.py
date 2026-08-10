@@ -13,6 +13,7 @@ from typing import Literal
 import anthropic
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
 from app.extraction.home_inspection import ExtractionError, SystemName
 
 MODEL = "claude-opus-5"
@@ -73,7 +74,7 @@ def generate_action_plan(structured_input: str, *, model: str = MODEL) -> Action
     if not structured_input.strip():
         raise ExtractionError("No structured input to reason over -- structured_input is empty.")
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key or None)
 
     try:
         response = client.messages.parse(

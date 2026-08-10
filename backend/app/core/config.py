@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     chunk_size_words: int = 180
     chunk_overlap_words: int = 30
 
+    # Claude API key used by app/extraction/home_inspection.py and
+    # action_plan.py. Read from backend/.env like everything else above; falls
+    # back to a real ANTHROPIC_API_KEY environment variable if unset here (see
+    # those modules' `anthropic.Anthropic(api_key=...)` calls).
+    anthropic_api_key: str = ""
+
     # Google Document AI, used by app/ingestion/ocr.py to read PDFs. The
     # pipeline never calls it on its own. GOOGLE_APPLICATION_CREDENTIALS is
     # deliberately not listed: the Google auth library reads that from the real

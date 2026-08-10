@@ -15,6 +15,8 @@ from typing import Literal
 import anthropic
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
+
 MODEL = "claude-opus-5"
 
 # The six systems every residential inspection report is expected to cover.
@@ -142,7 +144,7 @@ def extract_home_systems(raw_text: str, *, model: str = MODEL) -> HomeInspection
     if not raw_text.strip():
         raise ExtractionError("No text to extract from -- raw_text is empty.")
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key or None)
 
     try:
         response = client.messages.parse(
