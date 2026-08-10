@@ -18,6 +18,7 @@ import {
   URGENCY_TIERS,
   TYPICAL_LIFESPAN_YEARS,
   formatCostRange,
+  isSafetyHazard,
 } from "@/lib/format";
 
 function nextRecommendedAction(system: HomeSystem, items: ActionItem[]): ActionItem | null {
@@ -26,6 +27,17 @@ function nextRecommendedAction(system: HomeSystem, items: ActionItem[]): ActionI
   return [...matches].sort(
     (a, b) => URGENCY_TIERS.indexOf(a.urgency as never) - URGENCY_TIERS.indexOf(b.urgency as never),
   )[0];
+}
+
+// Deliberately the one pill that breaks the muted palette -- a solid fill
+// instead of every other pill's soft tint -- reserved for wording that
+// already names a genuine hazard (see isSafetyHazard).
+function SafetyTag() {
+  return (
+    <span className="rounded-full bg-brick px-2.5 py-0.5 text-[11px] font-semibold tracking-wide text-surface uppercase">
+      Safety concern
+    </span>
+  );
 }
 
 export default function TimelinePage() {
@@ -161,6 +173,7 @@ export default function TimelinePage() {
                           <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-[11px] font-semibold text-accent">
                             {URGENCY_LABELS[action.urgency] ?? action.urgency}
                           </span>
+                          {isSafetyHazard(action.recommendation, ...system.findings) && <SafetyTag />}
                           <span className="ml-auto font-mono text-xs font-semibold tabular-nums text-accent">
                             {formatCostRange(action.cost_low, action.cost_high)}
                           </span>

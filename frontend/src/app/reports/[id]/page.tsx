@@ -15,8 +15,10 @@ import {
   URGENCY_LABELS,
   URGENCY_TIERS,
   CONDITION_TONE,
+  CONDITION_LABEL,
   confidenceLabel,
   formatCostRange,
+  isSafetyHazard,
 } from "@/lib/format";
 
 function ConfidenceGauge({ value }: { value: number }) {
@@ -29,6 +31,17 @@ function ConfidenceGauge({ value }: { value: number }) {
         />
       </span>
       <span className="text-[11px] font-medium text-ink-faint">{confidenceLabel(value)} confidence</span>
+    </span>
+  );
+}
+
+// Deliberately the one pill in the system that breaks the muted palette --
+// a solid fill instead of every other pill's soft tint -- reserved for
+// wording that already names a genuine hazard (see isSafetyHazard).
+function SafetyTag() {
+  return (
+    <span className="rounded-full bg-brick px-2.5 py-0.5 text-[11px] font-semibold tracking-wide text-surface uppercase">
+      Safety concern
     </span>
   );
 }
@@ -114,6 +127,12 @@ export default function ReportPage() {
           <ul className="space-y-3">
             {homeReport.systems.map((system) => {
               const tone = CONDITION_TONE[system.condition] ?? CONDITION_TONE.not_mentioned;
+              const label = CONDITION_LABEL[system.condition] ?? system.condition;
+              const relatedActions = actionPlan.items.filter((item) => item.system === system.name);
+              const hazard = isSafetyHazard(
+                ...system.findings,
+                ...relatedActions.map((item) => item.recommendation),
+              );
               return (
                 <li
                   key={system.id}
@@ -126,8 +145,9 @@ export default function ReportPage() {
                     <span
                       className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold tracking-wide uppercase ${tone.pill}`}
                     >
-                      {system.condition.replace("_", " ")}
+                      {label}
                     </span>
+                    {hazard && <SafetyTag />}
                     <ConfidenceGauge value={system.condition_confidence} />
                     <span className="ml-auto font-mono text-xs tabular-nums text-ink-faint">
                       {system.estimated_age_years !== null
@@ -176,24 +196,29 @@ export default function ReportPage() {
                       {URGENCY_LABELS[tier]}
                     </h3>
                     <ul className="space-y-3 border-l border-line pl-5">
-                      {items.map((item) => (
-                        <li
-                          key={item.id}
-                          className="rounded-2xl border border-line bg-surface px-6 py-5 text-sm"
-                        >
-                          <div className="flex flex-wrap items-center gap-3">
-                            <span className="font-medium text-ink">
-                              {SYSTEM_LABELS[item.system] ?? item.system}
-                            </span>
-                            <span className="ml-auto font-mono text-xs font-semibold tabular-nums text-accent">
-                              {formatCostRange(item.cost_low, item.cost_high)}
-                            </span>
-                          </div>
-                          <p className="mt-2 text-[13.5px] leading-relaxed text-ink-soft">
-                            {item.recommendation}
-                          </p>
-                        </li>
-                      ))}
+                      {items.map((item) => {
+                        const system = homeReport.systems.find((s) => s.name === item.system);
+                        const hazard = isSafetyHazard(item.recommendation, ...(system?.findings ?? []));
+                        return (
+                          <li
+                            key={item.id}
+                            className="rounded-2xl border border-line bg-surface px-6 py-5 text-sm"
+                          >
+                            <div className="flex flex-wrap items-center gap-3">
+                              <span className="font-medium text-ink">
+                                {SYSTEM_LABELS[item.system] ?? item.system}
+                              </span>
+                              {hazard && <SafetyTag />}
+                              <span className="ml-auto font-mono text-xs font-semibold tabular-nums text-accent">
+                                {formatCostRange(item.cost_low, item.cost_high)}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-[13.5px] leading-relaxed text-ink-soft">
+                              {item.recommendation}
+                            </p>
+                          </li>
+                        );
+                      })}
                     </ul>
                   </li>
                 );

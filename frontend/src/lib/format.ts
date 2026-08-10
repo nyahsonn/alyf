@@ -42,6 +42,55 @@ export const CONDITION_TONE: Record<string, { pill: string; fill: string }> = {
   not_mentioned: { pill: "bg-surface-sunk text-ink-faint", fill: "bg-ink-faint" },
 };
 
+// Action-oriented labels, not verdicts -- mirrors the SER/MM/RR/NI legend
+// printed on the inspection reports ALYF ingests (see e.g. tests-reports),
+// rather than inventing new wording. A bare "Poor" reads as a grade handed
+// down on the whole system before a reader gets to any context; naming the
+// next step instead keeps the same information without the courtroom tone.
+export const CONDITION_LABEL: Record<string, string> = {
+  excellent: "Serviceable",
+  good: "Serviceable",
+  fair: "Monitor",
+  poor: "Repair or Replace",
+  not_mentioned: "Not Assessed",
+};
+
+// Deliberately separate from CONDITION_TONE/CONDITION_LABEL: a system can be
+// "Poor" for a routine, non-urgent reason (an aging roof) or for a genuine
+// life-safety reason (a furnace with flame roll-out). Condition and urgency
+// tier alone don't distinguish those, so this flags anything whose own
+// wording already names a hazard -- keyword matching against the AI's
+// generated text, not a verified backend classification. It only ever adds
+// a stronger flag on top of the existing signals; it never softens anything.
+const SAFETY_HAZARD_TERMS = [
+  "safety concern",
+  "safety hazard",
+  "safety issue",
+  "unsafe",
+  "hazard",
+  "carbon monoxide",
+  "combustion problem",
+  "combustion issue",
+  "flame roll-out",
+  "flame rollout",
+  "gas leak",
+  "shock risk",
+  "shock hazard",
+  "electrocution",
+  "fire risk",
+  "fire hazard",
+  "explosion",
+  "structural failure",
+  "structural collapse",
+  "life safety",
+  "life-safety",
+];
+
+export function isSafetyHazard(...texts: (string | null | undefined)[]): boolean {
+  const combined = texts.filter(Boolean).join(" ").toLowerCase();
+  return SAFETY_HAZARD_TERMS.some((term) => combined.includes(term));
+}
+
 // A bare decimal ("0.60") asks a homeowner to have an intuition for what
 // counts as high or low. A word doesn't -- the raw number stays available
 // via a tooltip for anyone who wants it (see ConfidenceGauge).
