@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   ApiError,
+  type ActionPlan,
   type Answer,
   type DbHealth,
   type Document,
@@ -20,6 +21,17 @@ const SYSTEM_LABELS: Record<string, string> = {
   water_heater: "Water heater",
   foundation: "Foundation",
 };
+
+const URGENCY_LABELS: Record<string, string> = {
+  next_90_days: "Next 90 days",
+  next_2_years: "Next 2 years",
+  next_5_years: "Next 5 years",
+};
+
+function formatCostRange(low: number, high: number): string {
+  const fmt = (value: number) => `$${value.toLocaleString()}`;
+  return low === high ? fmt(low) : `${fmt(low)} – ${fmt(high)}`;
+}
 
 const SAMPLE_TEXT = `Property: 482 Birchwood Lane
 Inspection Date: 2026-08-01
@@ -43,6 +55,7 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [facts, setFacts] = useState<Fact[]>([]);
   const [homeReport, setHomeReport] = useState<HomeReport | null>(null);
+  const [actionPlan, setActionPlan] = useState<ActionPlan | null>(null);
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [report, setReport] = useState<Report | null>(null);
 
@@ -93,12 +106,14 @@ export default function Home() {
       setSelectedId(documentId);
       setAnswer(null);
       setReport(null);
-      const [documentFacts, existingHomeReport] = await Promise.all([
+      const [documentFacts, existingHomeReport, existingActionPlan] = await Promise.all([
         api.listFacts(documentId),
         api.getHomeReport(documentId),
+        api.getActionPlan(documentId),
       ]);
       setFacts(documentFacts);
       setHomeReport(existingHomeReport);
+      setActionPlan(existingActionPlan);
     });
 
   const handleIngest = () =>
@@ -108,6 +123,7 @@ export default function Home() {
       setSelectedId(document.id);
       setFacts([]);
       setHomeReport(null);
+      setActionPlan(null);
       setAnswer(null);
       setReport(null);
     });
@@ -119,6 +135,7 @@ export default function Home() {
       setSelectedId(document.id);
       setFacts([]);
       setHomeReport(null);
+      setActionPlan(null);
       setAnswer(null);
       setReport(null);
     });
@@ -135,6 +152,12 @@ export default function Home() {
     run("home-report", async () => {
       if (!selectedId) return;
       setHomeReport(await api.createHomeReport(selectedId));
+    });
+
+  const handleActionPlan = () =>
+    run("action-plan", async () => {
+      if (!selectedId) return;
+      setActionPlan(await api.createActionPlan(selectedId));
     });
 
   const handleAsk = () =>
@@ -161,6 +184,7 @@ export default function Home() {
         setSelectedId(null);
         setFacts([]);
         setHomeReport(null);
+        setActionPlan(null);
         setAnswer(null);
         setReport(null);
       }
@@ -376,7 +400,51 @@ export default function Home() {
                 )}
               </Card>
 
-              <Card title="4 · Reason">
+              <Card title="4 · Action Plan">
+                <p className="mb-3 text-sm text-neutral-500">
+                  Turn the saved home report above into a prioritized,
+                  homeowner-facing plan — Claude reasons only over the
+                  system/finding rows already saved, never the document
+                  again, so it can&apos;t invent an age or condition that
+                  isn&apos;t already on record.
+                </p>
+                <Button
+                  onClick={handleActionPlan}
+                  loading={busy === "action-plan"}
+                  disabled={!homeReport || homeReport.systems.length === 0}
+                >
+                  {actionPlan && actionPlan.items.length > 0
+                    ? "Re-generate action plan"
+                    : "Generate action plan"}
+                </Button>
+                {actionPlan && actionPlan.items.length > 0 && (
+                  <ul className="mt-4 space-y-2">
+                    {actionPlan.items.map((item) => (
+                      <li
+                        key={item.id}
+                        className="rounded-md border border-neutral-200 px-3 py-2 text-xs dark:border-neutral-800"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">
+                            {SYSTEM_LABELS[item.system] ?? item.system}
+                          </span>
+                          <span className="rounded bg-neutral-100 px-1.5 py-0.5 font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                            {URGENCY_LABELS[item.urgency] ?? item.urgency}
+                          </span>
+                          <span className="ml-auto text-neutral-500">
+                            {formatCostRange(item.cost_low, item.cost_high)}
+                          </span>
+                        </div>
+                        <p className="mt-1.5 text-neutral-600 dark:text-neutral-400">
+                          {item.recommendation}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+
+              <Card title="5 · Reason">
                 <div className="flex gap-2">
                   <input
                     value={question}
@@ -415,7 +483,7 @@ export default function Home() {
                 )}
               </Card>
 
-              <Card title="5 · Report">
+              <Card title="6 · Report">
                 <Button onClick={handleReport} loading={busy === "report"}>
                   Generate report
                 </Button>

@@ -55,6 +55,22 @@ export type HomeReport = {
   systems: HomeSystem[];
 };
 
+export type ActionItem = {
+  id: string;
+  document_id: string;
+  system: string;
+  urgency: string;
+  recommendation: string;
+  cost_low: number;
+  cost_high: number;
+  created_at: string;
+};
+
+export type ActionPlan = {
+  document_id: string;
+  items: ActionItem[];
+};
+
 export type EvidenceItem = {
   fact_id: string;
   document_id: string;
@@ -175,6 +191,14 @@ export const api = {
 
   getHomeReport: (documentId: string) =>
     request<HomeReport>(`/documents/${documentId}/home-report`),
+
+  createActionPlan: (documentId: string) =>
+    request<ActionPlan>(`/documents/${documentId}/action-plan`, {
+      method: "POST",
+    }),
+
+  getActionPlan: (documentId: string) =>
+    request<ActionPlan>(`/documents/${documentId}/action-plan`),
 
   ask: (input: { question: string; document_id?: string; top_k?: number }) =>
     request<Answer>("/ask", { method: "POST", body: JSON.stringify(input) }),
