@@ -31,6 +31,12 @@ Condition = Literal["excellent", "good", "fair", "poor", "not_mentioned"]
 SYSTEM_PROMPT = f"""You are reading a home inspection report and pulling out what it says \
 about six systems: {", ".join(SYSTEM_NAMES)}.
 
+Also report the property's address: the street address (and city/state if given) the \
+report is for, usually on the cover page or in a "Property," "Subject Property," or \
+"Inspection Site" field near the top of the report. Give it its own confidence score \
+using the same rule as everything else below -- null with confidence 0.0 if the report \
+never states an address.
+
 For each of the six systems, report:
 - estimated_age: the age in years if the report states or clearly implies it for that \
 specific system (e.g. "installed in 2015" against a 2026 report date), otherwise null. \
@@ -89,6 +95,13 @@ class ExtractionError(RuntimeError):
     """
 
 
+class PropertyAddress(BaseModel):
+    address: str | None = Field(
+        description="The property's street address as stated in the report, or null"
+    )
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class AgeEstimate(BaseModel):
     years: int | None = Field(description="Estimated age of the system in years, or null")
     confidence: float = Field(ge=0.0, le=1.0)
@@ -114,6 +127,7 @@ class HomeSystem(BaseModel):
 
 
 class HomeInspectionReport(BaseModel):
+    address: PropertyAddress
     systems: list[HomeSystem]
 
 

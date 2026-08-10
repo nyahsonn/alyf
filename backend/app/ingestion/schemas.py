@@ -11,6 +11,8 @@ class DocumentCreate(BaseModel):
     content: str = Field(min_length=1)
     source_type: str = Field(default="text", max_length=50)
     source_ref: str | None = Field(default=None, max_length=1000)
+    file_bytes: bytes | None = Field(default=None)
+    file_sha256: str | None = Field(default=None, max_length=64)
 
 
 class ChunkRead(BaseModel):
@@ -30,6 +32,7 @@ class DocumentRead(BaseModel):
     source_type: str
     source_ref: str | None
     status: str
+    file_sha256: str | None
     created_at: datetime
 
 

@@ -11,7 +11,12 @@ import pytest
 from app.core.embeddings import embed_text
 from app.core.config import settings
 from app.extraction.models import Fact
-from app.extraction.service import Candidate, dedupe_candidates, extract_candidates
+from app.extraction.service import (
+    Candidate,
+    _normalize_address,
+    dedupe_candidates,
+    extract_candidates,
+)
 from app.ingestion.ocr import (
     BATCH_PAGE_LIMIT,
     ONLINE_PAGE_LIMIT,
@@ -105,6 +110,14 @@ def _pair(value: str, kind: str = "metric", chunk_id: uuid.UUID | None = None):
 
 def _summary(value: str) -> str:
     return " ".join(value.split()[:8])
+
+
+def test_normalize_address_folds_case_and_whitespace():
+    assert _normalize_address("  123  Main St. ") == _normalize_address("123 main st,")
+
+
+def test_normalize_address_does_not_fold_different_addresses():
+    assert _normalize_address("123 Main St") != _normalize_address("456 Main St")
 
 
 def test_dedupe_drops_exact_repeats():

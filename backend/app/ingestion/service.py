@@ -181,6 +181,8 @@ async def ingest_document(session: AsyncSession, payload: DocumentCreate) -> Doc
         content=payload.content,
         source_type=payload.source_type,
         source_ref=payload.source_ref,
+        file_bytes=payload.file_bytes,
+        file_sha256=payload.file_sha256,
         status="ingested",
     )
     session.add(document)

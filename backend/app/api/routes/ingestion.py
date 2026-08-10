@@ -1,5 +1,6 @@
 """HTTP endpoints for the ingestion module."""
 
+import hashlib
 import logging
 import uuid
 
@@ -66,6 +67,8 @@ async def upload_document(
             content=content,
             source_type=source_type,
             source_ref=file.filename,
+            file_bytes=raw,
+            file_sha256=hashlib.sha256(raw).hexdigest(),
         ),
     )
     return DocumentRead.model_validate(document)

@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.embeddings import embed_text
 from app.extraction.home_inspection import extract_home_systems
-from app.extraction.models import Fact, HomeSystemRecord
+from app.extraction.models import Fact, Finding, Home, InspectionEvent, SystemRecord
 from app.ingestion import service as ingestion_service
 
 # "Label: value" lines, e.g. "Revenue: $4.2M". A dash only separates when it is
@@ -229,9 +229,40 @@ async def list_facts(
     return list(result.scalars())
 
 
+def _normalize_address(address: str) -> str:
+    """Fold whitespace/case so a home lookup does not care about formatting noise.
+
+    Not a full address normalizer -- "123 Main St" and "123 Main Street" are
+    treated as different homes. Good enough while the only address source is
+    a single LLM reading of a report's cover page; revisit if reports for the
+    same property turn out not to match in practice.
+    """
+    return _WHITESPACE_RE.sub(" ", address.strip().lower()).rstrip(".,")
+
+
+async def _resolve_home(session: AsyncSession, address: str | None) -> Home:
+    """The home this address already belongs to, or a newly created one.
+
+    Flushes so the caller can use `home.id` as a foreign key right away --
+    these models use bare FK columns rather than relationship kwargs (see
+    extraction/models.py), so, unlike `Chunk(document=document, ...)`
+    elsewhere in the codebase, SQLAlchemy cannot resolve the id for us later.
+    """
+    normalized = _normalize_address(address) if address else None
+    if normalized is not None:
+        existing = await session.scalar(select(Home).where(Home.normalized_address == normalized))
+        if existing is not None:
+            return existing
+
+    home = Home(address=address, normalized_address=normalized)
+    session.add(home)
+    await session.flush()
+    return home
+
+
 async def extract_home_report(
     session: AsyncSession, document_id: uuid.UUID
-) -> list[HomeSystemRecord] | None:
+) -> list[SystemRecord] | None:
     """Run the AI Home Health Report extraction for a document, replacing any
     previous run for it.
 
@@ -242,6 +273,10 @@ async def extract_home_report(
     extractor needs. Returns None if the document does not exist; raises
     ExtractionError (see home_inspection.py) if Claude could not be reached or
     refused the request.
+
+    The extracted address resolves to an existing home (see `_resolve_home`)
+    or creates a new one, so multiple inspections of the same property share
+    one home row instead of each starting its own.
     """
     document = await ingestion_service.get_document(session, document_id)
     if document is None:
@@ -249,27 +284,39 @@ async def extract_home_report(
 
     report = extract_home_systems(document.content)
 
-    # Idempotent: a re-run should not double up systems.
-    await session.execute(
-        delete(HomeSystemRecord).where(HomeSystemRecord.document_id == document_id)
-    )
+    # Idempotent: a re-run should not double up events/systems/findings.
+    # Cascades through systems and findings via their ondelete="CASCADE" FKs,
+    # so this one delete replaces the whole tree for this document.
+    await session.execute(delete(InspectionEvent).where(InspectionEvent.document_id == document_id))
+
+    home = await _resolve_home(session, report.address.address)
+
+    event = InspectionEvent(home_id=home.id, document_id=document_id)
+    session.add(event)
+    await session.flush()
 
     records = [
-        HomeSystemRecord(
+        SystemRecord(
+            event_id=event.id,
             document_id=document_id,
             name=system.name,
             estimated_age_years=system.estimated_age.years,
             estimated_age_confidence=system.estimated_age.confidence,
             condition=system.condition.rating,
             condition_confidence=system.condition.confidence,
-            findings=system.findings.items,
             findings_confidence=system.findings.confidence,
         )
         for system in report.systems
     ]
-
     for record in records:
         session.add(record)
+    await session.flush()
+
+    for record, system in zip(records, report.systems, strict=True):
+        for position, text in enumerate(system.findings.items):
+            session.add(
+                Finding(system_id=record.id, document_id=document_id, text=text, position=position)
+            )
 
     await session.commit()
     for record in records:
@@ -277,7 +324,14 @@ async def extract_home_report(
     return records
 
 
-async def get_home_report(session: AsyncSession, document_id: uuid.UUID) -> list[HomeSystemRecord]:
-    query = select(HomeSystemRecord).where(HomeSystemRecord.document_id == document_id)
+async def get_home_report(session: AsyncSession, document_id: uuid.UUID) -> list[SystemRecord]:
+    query = select(SystemRecord).where(SystemRecord.document_id == document_id)
+    result = await session.execute(query)
+    return list(result.scalars())
+
+
+async def get_findings(session: AsyncSession, system_id: uuid.UUID) -> list[str]:
+    """A system's findings, in their original order."""
+    query = select(Finding.text).where(Finding.system_id == system_id).order_by(Finding.position)
     result = await session.execute(query)
     return list(result.scalars())

@@ -3,7 +3,16 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +32,12 @@ class Document(Base):
     source_ref: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="ingested")
+    # The original uploaded file, verbatim -- null for documents ingested from
+    # pasted text (POST /documents), which never had a file to begin with.
+    # `content` above is derived (OCR'd/decoded) and lossy; this is what lets
+    # any downstream row trace back to the actual source PDF.
+    file_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    file_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

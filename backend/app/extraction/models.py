@@ -1,11 +1,21 @@
 """Tables owned by the extraction module."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import (
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.config import settings
@@ -42,23 +52,83 @@ class Fact(Base):
     )
 
 
-class HomeSystemRecord(Base):
-    """One system's entry in a document's AI Home Health Report.
+class Home(Base):
+    """A physical property, matched across inspection events by address.
 
-    One row per (document, system name) -- see `extract_home_report`, which
-    replaces a document's rows on every re-run the same way `extract_document`
-    replaces `Fact` rows. Age, condition, and findings each carry their own
-    confidence rather than the whole row sharing one, since a report can be
-    explicit about a system's condition while saying nothing about its age.
+    Address matching (see `_normalize_address` in extraction/service.py) is a
+    normalized-string exact match, not a real address normalizer -- "123 Main
+    St" and "123 Main Street" will not be recognized as the same home. Good
+    enough while the only address source is a single LLM reading of a
+    report's cover page; revisit if that under-matches in practice.
+
+    Unlike every other table here, a home has no direct `document_id`: it is
+    meant to outlive any single document once a property has more than one
+    inspection on file, so it traces to its source PDFs through its events,
+    not directly.
     """
 
-    __tablename__ = "home_system_records"
-    __table_args__ = (
-        UniqueConstraint("document_id", "name", name="uq_home_system_document_name"),
-    )
+    __tablename__ = "homes"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    normalized_address: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class InspectionEvent(Base):
+    """One inspection report processed for a home.
+
+    One row per document -- see `extract_home_report`, which replaces an
+    event (and, via cascade, its systems and findings) on every re-run for
+    the same document, the same idempotent-rerun pattern `Fact` uses.
+    """
+
+    __tablename__ = "events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    home_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("homes.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    # Not yet extracted by the pipeline -- left for a future enhancement.
+    inspection_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SystemRecord(Base):
+    """One system's entry within an inspection event.
+
+    Age, condition, and findings each carry their own confidence rather than
+    the whole row sharing one, since a report can be explicit about a
+    system's condition while saying nothing about its age. `document_id` is
+    denormalized from `event_id` (the same pattern `Fact` uses for
+    `chunk_id` + `document_id`) so a system traces to its source PDF without
+    a join through events.
+    """
+
+    __tablename__ = "systems"
+    __table_args__ = (UniqueConstraint("event_id", "name", name="uq_system_event_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), index=True
     )
     document_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), index=True
@@ -68,8 +138,34 @@ class HomeSystemRecord(Base):
     estimated_age_confidence: Mapped[float] = mapped_column(Float, nullable=False)
     condition: Mapped[str] = mapped_column(String(30), nullable=False)
     condition_confidence: Mapped[float] = mapped_column(Float, nullable=False)
-    findings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     findings_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Finding(Base):
+    """One specific issue, defect, or recommendation from a system's findings list.
+
+    `position` preserves the list's original order, since findings are no
+    longer a single JSONB array on the system row. `document_id` is
+    denormalized the same way `SystemRecord.document_id` is -- `system_id` ->
+    `event_id` would also reach it, but that is two joins away.
+    """
+
+    __tablename__ = "findings"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    system_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("systems.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

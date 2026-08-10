@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from app.api.deps import SessionDep
 from app.extraction import service
 from app.extraction.home_inspection import ExtractionError
+from app.extraction.models import SystemRecord
 from app.extraction.schemas import ExtractionResult, FactRead, HomeReportResult, HomeSystemRead
 from app.ingestion import service as ingestion_service
 
@@ -43,6 +44,25 @@ async def list_facts(
     return [FactRead.model_validate(fact) for fact in facts]
 
 
+async def _to_home_system_read(session: SessionDep, record: SystemRecord) -> HomeSystemRead:
+    """Build the API read-shape for a system, which no longer carries its
+    findings directly -- `SystemRecord` has no `findings` attribute for
+    `model_validate` to read, since findings are now their own table.
+    """
+    return HomeSystemRead(
+        id=record.id,
+        document_id=record.document_id,
+        name=record.name,
+        estimated_age_years=record.estimated_age_years,
+        estimated_age_confidence=record.estimated_age_confidence,
+        condition=record.condition,
+        condition_confidence=record.condition_confidence,
+        findings=await service.get_findings(session, record.id),
+        findings_confidence=record.findings_confidence,
+        created_at=record.created_at,
+    )
+
+
 @router.post("/documents/{document_id}/home-report", response_model=HomeReportResult)
 async def create_home_report(document_id: uuid.UUID, session: SessionDep) -> HomeReportResult:
     """Generate the AI Home Health Report for a document via Claude.
@@ -65,7 +85,7 @@ async def create_home_report(document_id: uuid.UUID, session: SessionDep) -> Hom
 
     return HomeReportResult(
         document_id=document_id,
-        systems=[HomeSystemRead.model_validate(record) for record in records],
+        systems=[await _to_home_system_read(session, record) for record in records],
     )
 
 
@@ -78,5 +98,5 @@ async def get_home_report(document_id: uuid.UUID, session: SessionDep) -> HomeRe
     records = await service.get_home_report(session, document_id)
     return HomeReportResult(
         document_id=document_id,
-        systems=[HomeSystemRead.model_validate(record) for record in records],
+        systems=[await _to_home_system_read(session, record) for record in records],
     )
