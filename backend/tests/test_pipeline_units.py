@@ -10,9 +10,10 @@ import pytest
 
 from app.core.embeddings import embed_text
 from app.core.config import settings
-from app.extraction.models import Fact
+from app.extraction.models import Fact, SystemRecord
 from app.extraction.service import (
     Candidate,
+    _build_action_plan_input,
     _normalize_address,
     dedupe_candidates,
     extract_candidates,
@@ -118,6 +119,40 @@ def test_normalize_address_folds_case_and_whitespace():
 
 def test_normalize_address_does_not_fold_different_addresses():
     assert _normalize_address("123 Main St") != _normalize_address("456 Main St")
+
+
+def _system_record(name: str, condition: str = "fair", **overrides):
+    # A transient SQLAlchemy instance -- _build_action_plan_input only reads
+    # attributes, the same reasoning _fact() below uses for Fact. id is set
+    # explicitly since the mapped_column default only applies at flush time,
+    # which never happens for an instance that is never added to a session.
+    return SystemRecord(
+        id=uuid.uuid4(),
+        name=name,
+        estimated_age_years=overrides.get("estimated_age_years"),
+        estimated_age_confidence=overrides.get("estimated_age_confidence", 0.5),
+        condition=condition,
+        condition_confidence=overrides.get("condition_confidence", 0.5),
+        findings_confidence=overrides.get("findings_confidence", 0.5),
+    )
+
+
+def test_action_plan_input_includes_age_and_findings():
+    record = _system_record(
+        "roof", condition="poor", estimated_age_years=15, estimated_age_confidence=0.8
+    )
+    text = _build_action_plan_input([record], {record.id: ["Missing shingles near the ridge"]})
+    assert "roof:" in text
+    assert "age: 15 years (confidence 0.80)" in text
+    assert "condition: poor (confidence 0.50)" in text
+    assert "Missing shingles near the ridge" in text
+
+
+def test_action_plan_input_marks_unknown_age_and_no_findings():
+    record = _system_record("hvac", condition="not_mentioned")
+    text = _build_action_plan_input([record], {})
+    assert "age: unknown" in text
+    assert "findings: none" in text
 
 
 def test_dedupe_drops_exact_repeats():

@@ -14,9 +14,15 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.embeddings import embed_text
+from app.extraction.action_plan import generate_action_plan
 from app.extraction.home_inspection import extract_home_systems
-from app.extraction.models import Fact, Finding, Home, InspectionEvent, SystemRecord
+from app.extraction.models import ActionItem, Fact, Finding, Home, InspectionEvent, SystemRecord
 from app.ingestion import service as ingestion_service
+
+# Most-urgent-first, used to sort a returned action plan before persisting it
+# -- the prompt asks Claude to already order items this way, but the read
+# order is enforced here rather than trusted blindly.
+_URGENCY_RANK = {"next_90_days": 0, "next_2_years": 1, "next_5_years": 2}
 
 # "Label: value" lines, e.g. "Revenue: $4.2M". A dash only separates when it is
 # surrounded by whitespace -- otherwise hyphenated prose ("ship self-serve
@@ -333,5 +339,99 @@ async def get_home_report(session: AsyncSession, document_id: uuid.UUID) -> list
 async def get_findings(session: AsyncSession, system_id: uuid.UUID) -> list[str]:
     """A system's findings, in their original order."""
     query = select(Finding.text).where(Finding.system_id == system_id).order_by(Finding.position)
+    result = await session.execute(query)
+    return list(result.scalars())
+
+
+def _format_age(years: int | None, confidence: float) -> str:
+    if years is None:
+        return "unknown"
+    return f"{years} years (confidence {confidence:.2f})"
+
+
+def _build_action_plan_input(
+    records: list[SystemRecord], findings_by_system: dict[uuid.UUID, list[str]]
+) -> str:
+    """Render already-saved system/finding rows as plain text for Claude to
+    reason over.
+
+    Built from database rows only, never from a document's raw text -- see
+    `create_action_plan`. This is what makes "reason only over saved facts"
+    an actual guarantee rather than a prompt-only request: the report's raw
+    text is never in the call at all, so there is nothing beyond this text
+    for the model to draw an age or condition from.
+    """
+    blocks = []
+    for record in records:
+        findings = findings_by_system.get(record.id, [])
+        lines = [
+            f"{record.name}:",
+            f"  age: {_format_age(record.estimated_age_years, record.estimated_age_confidence)}",
+            f"  condition: {record.condition} (confidence {record.condition_confidence:.2f})",
+        ]
+        if findings:
+            lines.append(f"  findings (confidence {record.findings_confidence:.2f}):")
+            lines.extend(f"    - {finding}" for finding in findings)
+        else:
+            lines.append("  findings: none")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+async def create_action_plan(
+    session: AsyncSession, document_id: uuid.UUID
+) -> list[ActionItem] | None:
+    """Generate a prioritized action plan from a document's already-saved
+    system/finding rows, replacing any previous run for it.
+
+    Reasons only over what `extract_home_report` already persisted -- see
+    `_build_action_plan_input`. Returns None if the document has no
+    inspection event yet (run `extract_home_report` first); raises
+    ExtractionError (see home_inspection.py) if Claude could not be reached
+    or refused the request.
+    """
+    event_id = await session.scalar(
+        select(InspectionEvent.id).where(InspectionEvent.document_id == document_id)
+    )
+    if event_id is None:
+        return None
+
+    records = await get_home_report(session, document_id)
+    findings_by_system: dict[uuid.UUID, list[str]] = {}
+    for record in records:
+        findings_by_system[record.id] = await get_findings(session, record.id)
+
+    plan = generate_action_plan(_build_action_plan_input(records, findings_by_system))
+
+    # Idempotent: a re-run should not double up items.
+    await session.execute(delete(ActionItem).where(ActionItem.event_id == event_id))
+
+    ordered_items = sorted(plan.items, key=lambda item: _URGENCY_RANK[item.urgency])
+    action_items = [
+        ActionItem(
+            event_id=event_id,
+            document_id=document_id,
+            system=item.system,
+            urgency=item.urgency,
+            recommendation=item.recommendation,
+            cost_low=item.cost_low,
+            cost_high=item.cost_high,
+            position=position,
+        )
+        for position, item in enumerate(ordered_items)
+    ]
+    for action_item in action_items:
+        session.add(action_item)
+
+    await session.commit()
+    for action_item in action_items:
+        await session.refresh(action_item)
+    return action_items
+
+
+async def get_action_plan(session: AsyncSession, document_id: uuid.UUID) -> list[ActionItem]:
+    query = (
+        select(ActionItem).where(ActionItem.document_id == document_id).order_by(ActionItem.position)
+    )
     result = await session.execute(query)
     return list(result.scalars())

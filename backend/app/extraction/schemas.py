@@ -43,3 +43,21 @@ class HomeSystemRead(BaseModel):
 class HomeReportResult(BaseModel):
     document_id: uuid.UUID
     systems: list[HomeSystemRead]
+
+
+class ActionItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    document_id: uuid.UUID
+    system: str
+    urgency: str
+    recommendation: str
+    cost_low: int
+    cost_high: int
+    created_at: datetime
+
+
+class ActionPlanResult(BaseModel):
+    document_id: uuid.UUID
+    items: list[ActionItemRead]

@@ -9,7 +9,14 @@ from app.api.deps import SessionDep
 from app.extraction import service
 from app.extraction.home_inspection import ExtractionError
 from app.extraction.models import SystemRecord
-from app.extraction.schemas import ExtractionResult, FactRead, HomeReportResult, HomeSystemRead
+from app.extraction.schemas import (
+    ActionItemRead,
+    ActionPlanResult,
+    ExtractionResult,
+    FactRead,
+    HomeReportResult,
+    HomeSystemRead,
+)
 from app.ingestion import service as ingestion_service
 
 logger = logging.getLogger(__name__)
@@ -99,4 +106,49 @@ async def get_home_report(document_id: uuid.UUID, session: SessionDep) -> HomeRe
     return HomeReportResult(
         document_id=document_id,
         systems=[await _to_home_system_read(session, record) for record in records],
+    )
+
+
+@router.post("/documents/{document_id}/action-plan", response_model=ActionPlanResult)
+async def create_action_plan(document_id: uuid.UUID, session: SessionDep) -> ActionPlanResult:
+    """Generate a prioritized action plan from a document's already-saved home report.
+
+    Reasons only over the system/finding rows a prior `/home-report` run
+    persisted -- never the document's raw text again. Safe to call
+    repeatedly: previous items for the document are replaced.
+    """
+    if await ingestion_service.get_document(session, document_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    try:
+        items = await service.create_action_plan(session, document_id)
+    except ExtractionError as e:
+        logger.error("Action plan generation failed for document %s: %s", document_id, e)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not generate the action plan. See the server log for details.",
+        ) from None
+
+    if items is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No home report found for this document. Run POST /documents/{id}/home-report first.",
+        )
+
+    return ActionPlanResult(
+        document_id=document_id,
+        items=[ActionItemRead.model_validate(item) for item in items],
+    )
+
+
+@router.get("/documents/{document_id}/action-plan", response_model=ActionPlanResult)
+async def get_action_plan(document_id: uuid.UUID, session: SessionDep) -> ActionPlanResult:
+    """The most recently generated action plan for a document, if any."""
+    if await ingestion_service.get_document(session, document_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    items = await service.get_action_plan(session, document_id)
+    return ActionPlanResult(
+        document_id=document_id,
+        items=[ActionItemRead.model_validate(item) for item in items],
     )

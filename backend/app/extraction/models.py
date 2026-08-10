@@ -144,6 +144,38 @@ class SystemRecord(Base):
     )
 
 
+class ActionItem(Base):
+    """One prioritized recommendation from a home's action plan.
+
+    One row per item Claude returns for an event -- see `create_action_plan`
+    in service.py, which replaces an event's items on every re-run, same
+    idempotent-rerun pattern as everything else here. `position` preserves
+    the model's own most-urgent-first ordering; `document_id` is
+    denormalized the same way `SystemRecord.document_id` is.
+    """
+
+    __tablename__ = "action_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    system: Mapped[str] = mapped_column(String(50), nullable=False)
+    urgency: Mapped[str] = mapped_column(String(20), nullable=False)
+    recommendation: Mapped[str] = mapped_column(Text, nullable=False)
+    cost_low: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_high: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class Finding(Base):
     """One specific issue, defect, or recommendation from a system's findings list.
 
