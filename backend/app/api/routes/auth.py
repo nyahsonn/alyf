@@ -26,7 +26,12 @@ def _set_session_cookie(response: Response, inspector_id: uuid.UUID) -> None:
         value=token,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="lax",
+        # SameSite=None is required for the cookie to be sent on cross-site
+        # fetch() calls (the frontend and backend live on different domains
+        # in production, e.g. vercel.app / up.railway.app). Browsers reject
+        # SameSite=None without Secure, so this only flips once cookie_secure
+        # (HTTPS) is also on -- local http:// dev keeps the Lax default.
+        samesite="none" if settings.cookie_secure else "lax",
         max_age=settings.jwt_expires_days * 24 * 60 * 60,
         path="/",
     )
