@@ -97,8 +97,10 @@ npm install
 npm run dev
 ```
 
-The UI is at http://localhost:3000 — ingest a document, extract facts, ask questions,
-and generate a report, with a banner showing backend and database health.
+The UI is at http://localhost:3000 — that's the public landing page; sign up, then
+try the real product at `/upload`. The original generic-pipeline test harness
+(ingest a document, extract facts, ask questions, generate a Markdown report, with a
+banner showing backend and database health) has moved to `/dev`.
 
 ### Try it with the sample
 
@@ -303,8 +305,10 @@ purely by normalized address — see `_resolve_home` in `extraction/service.py`)
 each would see the other's findings through that collision. `Home.inspector_id` is
 part of the match specifically to prevent that.
 
-**Frontend:** `/login` and `/signup` are the only pages reachable without a session;
-`/` (the dev harness) and `/upload` both check `GET /auth/me` on load and redirect
+**Frontend:** `/login`, `/signup`, and the public landing page at `/` are the only
+pages reachable without a session; `/dev` (a leftover test harness for the original
+generic ingest/extract/reason/report pipeline, not the AI Home Health Report product
+itself) and `/upload` both check `GET /auth/me` on load and redirect
 to `/login` on `401`, backed up by `frontend/src/proxy.ts`, which redirects on the
 session cookie's absence before the page even loads — a UX shortcut, not the real
 security boundary, since it only checks the cookie is *present*, not that it's

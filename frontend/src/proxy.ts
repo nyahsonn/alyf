@@ -20,6 +20,8 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   // Inspector-facing pages only -- /reports/* stays unauthenticated
-  // (homeowner-facing, no login), same for /login and /signup themselves.
-  matcher: ["/", "/upload"],
+  // (homeowner-facing, no login), same for /login, /signup, and the public
+  // landing page at "/" itself. /dev is the old generic-pipeline test
+  // harness, still gated the same way "/" used to be.
+  matcher: ["/dev", "/upload"],
 };
