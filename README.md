@@ -195,6 +195,11 @@ All routes are mounted under `/api/v1`.
 | `GET`    | `/documents/{id}/home-report`   | The most recently generated home report, if any |
 | `POST`   | `/documents/{id}/action-plan`   | Generate a prioritized action plan via Claude  |
 | `GET`    | `/documents/{id}/action-plan`   | The most recently generated action plan, if any |
+| `GET`    | `/documents/{id}/status`        | The report's review status (see [Review and approval](#review-and-approval)) |
+| `POST`   | `/documents/{id}/approve`       | Inspector sign-off — unlocks the report at its public link |
+| `PATCH`  | `/documents/{id}/findings/{finding_id}` | Edit a finding's wording during review |
+| `PATCH`  | `/documents/{id}/action-items/{item_id}` | Edit an action item's urgency tier and/or recommendation during review |
+| `GET`    | `/documents/{id}/buyer-report`  | The public, unauthenticated report a buyer sees at its link |
 | `POST`   | `/ask`                          | Vector-search **your own** facts and compose an answer |
 | `GET`    | `/insights`                     | List **your own** past questions and their answers |
 | `POST`   | `/reports`                      | Generate a Markdown report for a document      |
@@ -205,11 +210,16 @@ All routes are mounted under `/api/v1`.
 opts that document into the weekly roadmap reminder job — see
 [Weekly roadmap reminders](#weekly-roadmap-reminders).
 
-Every route above except `/health*`, `/auth/signup`, `/auth/login`, and the
-unsubscribe route requires a logged-in inspector (see
-[Inspector accounts](#inspector-accounts)) and only ever operates on that
-inspector's own data — a document, report, or insight belonging to someone
-else returns `404`, the same response as one that doesn't exist at all.
+Every route above except `/health*`, `/auth/signup`, `/auth/login`, the
+unsubscribe route, and `/documents/{id}/buyer-report` requires a logged-in
+inspector (see [Inspector accounts](#inspector-accounts)) and only ever
+operates on that inspector's own data — a document, report, or insight
+belonging to someone else returns `404`, the same response as one that
+doesn't exist at all. `/documents/{id}/buyer-report` shares the unsubscribe
+route's trust model instead — an unguessable id, no login, since homeowners
+don't have inspector accounts — and additionally withholds every field but
+`status` until the report is out of `pending_review` (see
+[Review and approval](#review-and-approval)).
 
 ## Configuration
 
@@ -243,6 +253,7 @@ gitignored.
 | `RESEND_API_KEY`       | —                                                    | Needed by `scripts/send_roadmap_reminders.py` — see [Weekly roadmap reminders](#weekly-roadmap-reminders) |
 | `RESEND_FROM_EMAIL`    | `onboarding@resend.dev`                              | Resend's sandbox sender; works with no domain verification |
 | `FRONTEND_BASE_URL`    | `http://localhost:3000`                              | Used to build the report link inside reminder emails |
+| `AUTO_SEND_AFTER_HOURS` | `36`                                                | How long a report can sit at `pending_review` before `scripts/auto_send_pending_reports.py` moves it to `auto_sent` on its own — see [Review and approval](#review-and-approval) |
 | `JWT_SECRET`           | a working local placeholder                          | **Change this in any real deployment** — see [Inspector accounts](#inspector-accounts) |
 | `JWT_EXPIRES_DAYS`     | `14`                                                 | Session length                                 |
 | `AUTH_COOKIE_NAME`     | `alyf_session`                                       | Also hardcoded in `frontend/src/proxy.ts` — keep the two in sync if you change it |
@@ -298,8 +309,12 @@ to `/login` on `401`, backed up by `frontend/src/proxy.ts`, which redirects on t
 session cookie's absence before the page even loads — a UX shortcut, not the real
 security boundary, since it only checks the cookie is *present*, not that it's
 valid. **`/reports/*` is deliberately excluded from all of this** — homeowners don't
-have inspector accounts, so the report, timeline, and unsubscribe pages stay exactly
-as unauthenticated, link-based access as before.
+have inspector accounts, so the report, timeline, and unsubscribe pages support
+unauthenticated, link-based access too. Concretely, the report and timeline pages try
+the authenticated, owned-document routes first and fall back to the public
+`GET /documents/{id}/buyer-report` route when that fails (not logged in, or logged in
+as someone else) — see [Review and approval](#review-and-approval) for the full
+inspector-vs-buyer split, including the review gate that route enforces.
 
 Explicit non-goals for now: no email verification, no forgot-password flow, no
 rate-limiting or lockout on failed logins, no roles or admin view. CSRF is handled by
@@ -514,13 +529,104 @@ and `docker compose up -d` to rebuild it from scratch instead.) The new
 `reminder_logs` table needs no such step — it's a table `create_all` has never seen
 before, so a normal backend restart creates it.
 
+## Review and approval
+
+An AI-generated finding, urgency, or cost estimate is a draft until an inspector has
+looked at it — nothing reaches a buyer un-reviewed. `InspectionEvent.status` (one row
+per document, see `app/extraction/models.py`) tracks this: `pending_review` (set the
+moment the home report + action plan are generated) → `approved` (the inspector
+reviewed it, via `POST /documents/{id}/approve`) or `auto_sent` (the inspector never
+acted within the auto-send window — see below). There's no separate manual "send"
+step beyond that: this product has no send-to-buyer email flow today, so both
+terminal states mean the same thing to a buyer — the report is now visible at its
+link, `GET /documents/{id}/buyer-report`.
+
+**Inspector review.** `/reports/{id}` in the frontend tries the authenticated,
+owned-document routes first (`GET /documents/{id}`, `.../home-report`,
+`.../action-plan`, plus the new `.../status`); success means the viewer is the
+report's own inspector, and the page renders in review mode — inline edit controls
+on each finding's wording and each action item's urgency tier/recommendation
+(`PATCH .../findings/{id}`, `PATCH .../action-items/{id}`, text-only, no add/delete),
+a status badge, and an "Approve for buyer" button. Cost estimates are not editable
+here and not part of what approval covers — see
+[Going from offline to real models](#going-from-offline-to-real-models) for where
+cost comes from.
+
+**Buyer view.** The same `/reports/{id}` page falls back to
+`GET /documents/{id}/buyer-report` — no `OwnedDocumentDep`, same unguessable-link
+trust model as the unsubscribe route — whenever the authenticated calls fail (not
+logged in, or logged in as a different inspector). That endpoint withholds every
+field but `status` while a report is `pending_review`; the frontend shows a short
+"still being reviewed" holding page instead of findings/costs in that case. This is
+the actual liability boundary the whole review gate exists to enforce, and it's
+enforced there — `app/extraction/service.py`'s `get_buyer_report` — not trusted to
+the frontend to withhold.
+
+**Auto-send fallback**, so a slow inspector doesn't block delivery:
+
+```bash
+cd backend
+python scripts/auto_send_pending_reports.py --dry-run   # counts without changing anything
+python scripts/auto_send_pending_reports.py              # moves stale reports to auto_sent
+```
+
+Same "script, not a scheduled job" story as the weekly reminder script above — point
+your platform's cron / scheduled-task feature at it, run it more often than the
+window itself (e.g. hourly) so a report doesn't sit auto-sendable for long before a
+run actually picks it up. The window is `AUTO_SEND_AFTER_HOURS` (default `36`, the
+midpoint of a 24–48h target). No email is sent by this script — it only changes a
+report's status; the weekly reminder job is what actually emails anything, and (see
+below) only once a report is `approved` or `auto_sent`.
+
+**The weekly reminder job never reaches into an unreviewed report.**
+`send_weekly_reminders` now skips any document whose event isn't `approved` or
+`auto_sent` before it ever calls `get_action_plan` for it — see
+`app/notifications/service.py` and `is_report_visible` in
+`app/extraction/service.py`.
+
+An already-running local database needs the same kind of manual schema update as
+`notify_email` before it:
+
+```sql
+ALTER TABLE events ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'pending_review';
+ALTER TABLE events ADD COLUMN reviewed_at TIMESTAMPTZ;
+ALTER TABLE action_items ADD COLUMN cost_source VARCHAR(30) NOT NULL DEFAULT 'ai_estimated';
+```
+
+`cost_source` is set in code (`create_action_plan`) as `"ai_estimated"` — never asked
+of Claude. It's the seam a real pricing API (e.g. RSMeans) swaps into later without
+another schema change: persist a different value there once `cost_low`/`cost_high`
+come from that source instead.
+
+## Disclaimers
+
+Two disclaimers, both placeholder copy — **not legal advice, flag for real legal
+review before launch**:
+
+- **Cost disclaimer** (`COST_DISCLAIMER` in `frontend/src/lib/format.ts`, and its own
+  copy in `app/notifications/service.py` for the reminder email — Python and
+  TypeScript can't share a constant): attached directly next to every cost
+  estimate's own block on the report/timeline pages, and next to the cost figures in
+  the weekly reminder email. Deliberately not a single disclaimer at the top or
+  bottom of the page — proximity to the figure it qualifies is what actually gets
+  read.
+- **General report disclaimer** (`reportDisclaimer` in the same file): once, near the
+  top of the report and timeline pages, naming the inspector by `inspector_name`
+  where available (falls back to "your inspector" otherwise — see
+  [Review and approval](#review-and-approval) for where that name comes from).
+
 ## Tests
 
-Fifty-five unit tests cover chunking, the rule-based extractor, dedupe, answer
-composition, embedding, PDF/table handling, and (`test_notifications.py`) the weekly
-roadmap reminder logic — the escalating reminder cadence, the safety-hazard keyword
-check, and the email wording. They exercise pure functions only, so no database or
-running server is needed:
+68 unit tests cover chunking, the rule-based extractor, dedupe, answer composition,
+embedding, PDF/table handling, and (`test_notifications.py`) the weekly roadmap
+reminder logic — the escalating reminder cadence, the safety-hazard keyword check,
+and the email wording (including the cost disclaimer, see
+[Disclaimers](#disclaimers)). They exercise pure functions only, so no database or
+running server is needed. The review/approval workflow's own logic
+(`approve_event`, `auto_send_stale_events`, `is_report_visible`, and friends in
+`app/extraction/service.py`) is not covered here, since it's DB-backed and this repo
+has no DB-fixture test setup yet — exercise it against a real database instead (see
+[Review and approval](#review-and-approval)'s scripts, or the frontend flow directly).
 
 ```bash
 cd backend

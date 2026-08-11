@@ -144,3 +144,15 @@ def test_reminder_email_notes_overdue_items_as_overdue():
     item = _item("hvac", "Something overdue.", created_at=NOW - timedelta(days=100))
     _, body = build_reminder_email(document, [item], as_of=NOW)
     assert "overdue by 10 day" in body
+
+
+def test_reminder_email_includes_a_cost_disclaimer():
+    # Same proximity-to-the-claim principle as the report page's inline
+    # cost disclaimer -- this is the one place cost figures actually get
+    # emailed out, so they shouldn't go unguarded here either.
+    document = _document()
+    item = _item("roof", "Something to check on.", created_at=NOW)
+    _, body = build_reminder_email(document, [item], as_of=NOW)
+    assert "AI-generated" in body
+    assert "not quotes" in body
+    assert "licensed contractor" in body

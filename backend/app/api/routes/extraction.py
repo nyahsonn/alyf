@@ -1,6 +1,7 @@
 """HTTP endpoints for the extraction module."""
 
 import logging
+import uuid
 
 import sentry_sdk
 from fastapi import APIRouter, HTTPException, Query, status
@@ -10,10 +11,16 @@ from app.extraction import service
 from app.extraction.home_inspection import ExtractionError
 from app.extraction.models import SystemRecord
 from app.extraction.schemas import (
+    ActionItemEditRequest,
     ActionItemRead,
     ActionPlanResult,
+    BuyerReportResult,
+    BuyerReportSystem,
+    EventStatusRead,
     ExtractionResult,
     FactRead,
+    FindingEditRequest,
+    FindingRead,
     HomeReportResult,
     HomeSystemRead,
 )
@@ -21,6 +28,10 @@ from app.extraction.schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["extraction"])
+
+_NO_HOME_REPORT_DETAIL = (
+    "No home report found for this document. Run POST /documents/{id}/home-report first."
+)
 
 
 @router.post("/documents/{document_id}/extract", response_model=ExtractionResult)
@@ -57,6 +68,7 @@ async def _to_home_system_read(session: SessionDep, record: SystemRecord) -> Hom
     findings directly -- `SystemRecord` has no `findings` attribute for
     `model_validate` to read, since findings are now their own table.
     """
+    finding_records = await service.get_finding_records(session, record.id)
     return HomeSystemRead(
         id=record.id,
         document_id=record.document_id,
@@ -65,7 +77,8 @@ async def _to_home_system_read(session: SessionDep, record: SystemRecord) -> Hom
         estimated_age_confidence=record.estimated_age_confidence,
         condition=record.condition,
         condition_confidence=record.condition_confidence,
-        findings=await service.get_findings(session, record.id),
+        findings=[f.text for f in finding_records],
+        finding_ids=[f.id for f in finding_records],
         findings_confidence=record.findings_confidence,
         created_at=record.created_at,
     )
@@ -137,7 +150,7 @@ async def create_action_plan(document: OwnedDocumentDep, session: SessionDep) ->
     if items is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="No home report found for this document. Run POST /documents/{id}/home-report first.",
+            detail=_NO_HOME_REPORT_DETAIL,
         )
 
     return ActionPlanResult(
@@ -153,4 +166,104 @@ async def get_action_plan(document: OwnedDocumentDep, session: SessionDep) -> Ac
     return ActionPlanResult(
         document_id=document.id,
         items=[ActionItemRead.model_validate(item) for item in items],
+    )
+
+
+@router.get("/documents/{document_id}/status", response_model=EventStatusRead)
+async def get_status(document: OwnedDocumentDep, session: SessionDep) -> EventStatusRead:
+    """The inspector-facing review status -- powers the status badge and
+    whether to show the Approve button."""
+    event = await service.get_event_status(session, document.id)
+    if event is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_NO_HOME_REPORT_DETAIL,
+        )
+    return EventStatusRead.model_validate(event)
+
+
+@router.post("/documents/{document_id}/approve", response_model=EventStatusRead)
+async def approve(document: OwnedDocumentDep, session: SessionDep) -> EventStatusRead:
+    """Inspector sign-off: unlocks this report at its public link. Safe to
+    call again later (e.g. after an auto-send already happened) -- it just
+    records that a human has now also reviewed it."""
+    event = await service.approve_event(session, document.id)
+    if event is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_NO_HOME_REPORT_DETAIL,
+        )
+    return EventStatusRead.model_validate(event)
+
+
+@router.patch("/documents/{document_id}/findings/{finding_id}", response_model=FindingRead)
+async def edit_finding(
+    document: OwnedDocumentDep,
+    finding_id: uuid.UUID,
+    payload: FindingEditRequest,
+    session: SessionDep,
+) -> FindingRead:
+    """Inspector edit during review: correct a finding's wording."""
+    finding = await service.update_finding(session, document.id, finding_id, payload.text)
+    if finding is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finding not found")
+    return FindingRead.model_validate(finding)
+
+
+@router.patch("/documents/{document_id}/action-items/{item_id}", response_model=ActionItemRead)
+async def edit_action_item(
+    document: OwnedDocumentDep,
+    item_id: uuid.UUID,
+    payload: ActionItemEditRequest,
+    session: SessionDep,
+) -> ActionItemRead:
+    """Inspector edit during review: correct an action item's urgency tier
+    and/or recommendation. Cost is deliberately not editable here -- cost
+    estimates are not part of what the inspector reviews and approves."""
+    item = await service.update_action_item(
+        session,
+        document.id,
+        item_id,
+        urgency=payload.urgency,
+        recommendation=payload.recommendation,
+    )
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
+    return ActionItemRead.model_validate(item)
+
+
+@router.get("/documents/{document_id}/buyer-report", response_model=BuyerReportResult)
+async def get_buyer_report(document_id: uuid.UUID, session: SessionDep) -> BuyerReportResult:
+    """The public, unauthenticated view of a report -- the one route in
+    this file with no OwnedDocumentDep. Same trust model as the unsubscribe
+    route in app/api/routes/ingestion.py: an unguessable id, no inspector
+    login, since homeowners don't have accounts. Returns just `status` (no
+    systems/findings/costs) while a report is still pending_review -- that
+    withholding is the actual review gate, enforced in
+    extraction/service.py's get_buyer_report, not here.
+    """
+    report = await service.get_buyer_report(session, document_id)
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+    return BuyerReportResult(
+        status=report.status,
+        document_id=document_id,
+        title=report.title,
+        inspector_name=report.inspector_name,
+        created_at=report.created_at,
+        systems=[
+            BuyerReportSystem(
+                id=record.id,
+                name=record.name,
+                estimated_age_years=record.estimated_age_years,
+                estimated_age_confidence=record.estimated_age_confidence,
+                condition=record.condition,
+                condition_confidence=record.condition_confidence,
+                findings=report.findings_by_system.get(record.id, []),
+                findings_confidence=record.findings_confidence,
+            )
+            for record in report.systems
+        ],
+        action_items=[ActionItemRead.model_validate(item) for item in report.action_items],
     )

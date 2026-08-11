@@ -40,8 +40,24 @@ worth budgeting for eventually.
 - recommendation: one or two plain-language sentences a homeowner can act on -- frame what \
 to do and why it matters, grounded only in the given data, not a verbatim restatement of a \
 finding.
-- cost_low / cost_high: a rough US dollar range, in whole dollars, for addressing this item, \
-from general knowledge of typical repair/replacement costs. This is an estimate, not a quote.
+- cost_low / cost_high: a rough US dollar range, in whole dollars, for addressing exactly the \
+scope described in this item's findings -- not the cost of replacing the whole system. From \
+general knowledge of typical US residential repair/replacement costs. This is an estimate, not \
+a quote.
+  - Match the range to the finding's actual severity and scope. A single localized repair \
+(a leaking fixture, a section of damaged flashing, a loose connection) should get a narrow \
+range priced as a repair; only price at full-system-replacement levels when the finding \
+itself describes replacement-level damage (e.g. "no longer functional," "beyond repair," \
+"end of useful life") or the system's condition and findings together clearly point that way.
+  - Keep the range as narrow as the available information honestly supports. The high end \
+should typically stay within roughly 2-3x the low end. Go wider only when the finding itself \
+describes genuinely open-ended scope (e.g. it names a problem whose fix depends on what a \
+contractor finds once the wall/roof/system is opened up, or explicitly says further \
+inspection is needed to know the extent) -- and even then, do not pad the high end past what \
+that described uncertainty actually supports.
+  - Do not default to a wide range just to hedge uncertainty about the finding itself; a \
+low-confidence finding should be hedged in the recommendation's wording (as above), not by \
+inflating the cost spread.
 
 Skip a system entirely if it is in good/excellent condition with no findings and nothing \
 worth flagging -- not every system needs an action item. Also skip a system whose condition \

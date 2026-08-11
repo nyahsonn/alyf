@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # the deployed frontend's real URL in production, not NEXT_PUBLIC_API_URL.
     frontend_base_url: str = "http://localhost:3000"
 
+    # How long a report can sit at status="pending_review" before
+    # scripts/auto_send_pending_reports.py moves it to "auto_sent" on its
+    # own, so a slow inspector doesn't block delivery to the buyer. Midpoint
+    # of the 24-48h window the product calls for.
+    auto_send_after_hours: int = 36
+
     # Inspector accounts (app/auth). jwt_secret gets the same treatment as
     # POSTGRES_PASSWORD's default elsewhere in this repo: a working local
     # value with no setup required, which MUST be overridden by a real

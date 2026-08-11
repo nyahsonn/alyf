@@ -119,6 +119,17 @@ def _due_wording(days: int) -> str:
     return f"overdue by {-days} day{'s' if -days != 1 else ''}"
 
 
+# Same proximity-to-the-claim principle as the report page's inline cost
+# disclaimer (see frontend/src/lib/format.ts) -- placed right after the cost
+# figures it qualifies, not only in a footer far below them.
+_COST_DISCLAIMER = (
+    "Costs above are AI-generated general ranges, not quotes, and have not been "
+    "independently verified. They are not part of the inspector's findings or "
+    "professional opinion. Have a licensed contractor confirm scope and cost "
+    "before making repair decisions."
+)
+
+
 def build_reminder_email(
     document: Document, items: list[ActionItem], *, as_of: datetime
 ) -> tuple[str, str]:
@@ -153,6 +164,8 @@ def build_reminder_email(
         lines.append(f"  {prefix}{item.recommendation}")
         lines.append("")
 
+    lines.append(_COST_DISCLAIMER)
+    lines.append("")
     lines.append(f"Full report: {report_url}")
     lines.append("")
     lines.append(f"Stop these reminders: {unsubscribe_url}")
@@ -193,6 +206,13 @@ async def send_weekly_reminders(session: AsyncSession, *, dry_run: bool = False)
 
     sent = 0
     for document in documents:
+        # Never reach into a report an inspector hasn't approved (or that
+        # hasn't auto-sent past its review window) -- see
+        # InspectionEvent.status and extraction/service.py's
+        # is_report_visible.
+        if not await extraction_service.is_report_visible(session, document.id):
+            continue
+
         items = await extraction_service.get_action_plan(session, document.id)
         outstanding = [item for item in items if item.urgency == "next_90_days"]
         if not outstanding:

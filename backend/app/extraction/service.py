@@ -8,16 +8,23 @@ and is trivial to reason about while you build out the rest of the system. Swap
 
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import service as auth_service
 from app.core.embeddings import embed_text
 from app.extraction.action_plan import generate_action_plan
 from app.extraction.home_inspection import extract_home_systems
 from app.extraction.models import ActionItem, Fact, Finding, Home, InspectionEvent, SystemRecord
 from app.ingestion import service as ingestion_service
+
+# Terminal review states -- a report in either one has cleared the
+# pending_review gate and is visible to its buyer. See InspectionEvent's
+# docstring for why there's no separate third "sent" state.
+_VISIBLE_STATUSES = ("approved", "auto_sent")
 
 # Most-urgent-first, used to sort a returned action plan before persisting it
 # -- the prompt asks Claude to already order items this way, but the read
@@ -348,11 +355,20 @@ async def get_home_report(session: AsyncSession, document_id: uuid.UUID) -> list
     return list(result.scalars())
 
 
-async def get_findings(session: AsyncSession, system_id: uuid.UUID) -> list[str]:
-    """A system's findings, in their original order."""
-    query = select(Finding.text).where(Finding.system_id == system_id).order_by(Finding.position)
+async def get_finding_records(session: AsyncSession, system_id: uuid.UUID) -> list[Finding]:
+    """A system's findings, in their original order, as full rows -- used
+    wherever a caller needs each finding's id (e.g. the inspector-facing
+    home-report read, to know which row a PATCH .../findings/{id} targets),
+    not just its text.
+    """
+    query = select(Finding).where(Finding.system_id == system_id).order_by(Finding.position)
     result = await session.execute(query)
     return list(result.scalars())
+
+
+async def get_findings(session: AsyncSession, system_id: uuid.UUID) -> list[str]:
+    """A system's findings, in their original order, as plain text."""
+    return [record.text for record in await get_finding_records(session, system_id)]
 
 
 def _format_age(years: int | None, confidence: float) -> str:
@@ -402,11 +418,10 @@ async def create_action_plan(
     ExtractionError (see home_inspection.py) if Claude could not be reached
     or refused the request.
     """
-    event_id = await session.scalar(
-        select(InspectionEvent.id).where(InspectionEvent.document_id == document_id)
-    )
-    if event_id is None:
+    event = await _get_event(session, document_id)
+    if event is None:
         return None
+    event_id = event.id
 
     records = await get_home_report(session, document_id)
     findings_by_system: dict[uuid.UUID, list[str]] = {}
@@ -418,6 +433,15 @@ async def create_action_plan(
     # Idempotent: a re-run should not double up items.
     await session.execute(delete(ActionItem).where(ActionItem.event_id == event_id))
 
+    # A re-run replaces content the inspector may have already reviewed and
+    # approved -- force a fresh review of the new content rather than
+    # leaving it visible to the buyer under the old approval. Only matters
+    # once this is reachable from a "regenerate" action; nothing in the
+    # product does that today, but the API itself must not leave this gap.
+    if event.status in _VISIBLE_STATUSES:
+        event.status = "pending_review"
+        event.reviewed_at = None
+
     ordered_items = sorted(plan.items, key=lambda item: _URGENCY_RANK[item.urgency])
     action_items = [
         ActionItem(
@@ -428,6 +452,10 @@ async def create_action_plan(
             recommendation=item.recommendation,
             cost_low=item.cost_low,
             cost_high=item.cost_high,
+            # Always "ai_estimated" today -- Claude is never asked for this,
+            # it is set here so a real pricing API can be swapped in later
+            # (a different value here) without a schema change.
+            cost_source="ai_estimated",
             position=position,
         )
         for position, item in enumerate(ordered_items)
@@ -447,3 +475,176 @@ async def get_action_plan(session: AsyncSession, document_id: uuid.UUID) -> list
     )
     result = await session.execute(query)
     return list(result.scalars())
+
+
+async def _get_event(session: AsyncSession, document_id: uuid.UUID) -> InspectionEvent | None:
+    return await session.scalar(
+        select(InspectionEvent).where(InspectionEvent.document_id == document_id)
+    )
+
+
+async def get_event_status(session: AsyncSession, document_id: uuid.UUID) -> InspectionEvent | None:
+    """A document's review status + when it last changed, for the
+    inspector's status badge. None if the document has no inspection event
+    (home report never generated)."""
+    return await _get_event(session, document_id)
+
+
+async def is_report_visible(session: AsyncSession, document_id: uuid.UUID) -> bool:
+    """Whether a report has cleared the review gate -- approved or
+    auto_sent, per InspectionEvent's docstring. Used by
+    notifications/service.py so the weekly reminder job never pulls from a
+    still-pending_review report.
+    """
+    event = await _get_event(session, document_id)
+    return event is not None and event.status in _VISIBLE_STATUSES
+
+
+async def approve_event(session: AsyncSession, document_id: uuid.UUID) -> InspectionEvent | None:
+    """Inspector sign-off: the review gate that unlocks a report for its
+    buyer. Idempotent -- callable again after auto_sent (e.g. once the
+    inspector actually gets to a report the timeout already released) to
+    record that a human has now also reviewed it, without erroring.
+    """
+    event = await _get_event(session, document_id)
+    if event is None:
+        return None
+    event.status = "approved"
+    event.reviewed_at = datetime.now(UTC)
+    await session.commit()
+    await session.refresh(event)
+    return event
+
+
+async def auto_send_stale_events(
+    session: AsyncSession, *, after: timedelta, dry_run: bool = False
+) -> int:
+    """Move every report still pending_review past the auto-send window to
+    auto_sent, so a slow inspector doesn't block delivery to the buyer.
+
+    Anchored on InspectionEvent.created_at -- there is no separate "review
+    started" timestamp, and created_at is set the moment the event (and so
+    the pending_review state) begins, right after the home report is
+    generated. Returns the count that were (or, in dry-run mode, would be)
+    moved.
+    """
+    cutoff = datetime.now(UTC) - after
+    stale = list(
+        await session.scalars(
+            select(InspectionEvent).where(
+                InspectionEvent.status == "pending_review",
+                InspectionEvent.created_at < cutoff,
+            )
+        )
+    )
+    if not dry_run and stale:
+        now = datetime.now(UTC)
+        for event in stale:
+            event.status = "auto_sent"
+            event.reviewed_at = now
+        await session.commit()
+    return len(stale)
+
+
+async def update_finding(
+    session: AsyncSession, document_id: uuid.UUID, finding_id: uuid.UUID, text: str
+) -> Finding | None:
+    """Inspector edit during review: correct a finding's wording. Text-only
+    -- no add/delete of findings, see the review-workflow plan this
+    implements. Scoped to document_id as well as finding_id so a caller
+    can't reach a finding belonging to a different document than the one
+    ownership was already checked against (see OwnedDocumentDep).
+    """
+    finding = await session.scalar(
+        select(Finding).where(Finding.id == finding_id, Finding.document_id == document_id)
+    )
+    if finding is None:
+        return None
+    finding.text = text
+    await session.commit()
+    await session.refresh(finding)
+    return finding
+
+
+async def update_action_item(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    item_id: uuid.UUID,
+    *,
+    urgency: str | None = None,
+    recommendation: str | None = None,
+) -> ActionItem | None:
+    """Inspector edit during review: correct an action item's urgency tier
+    and/or recommendation text. Cost is deliberately not editable here --
+    cost estimates are not part of what the inspector reviews and approves.
+    """
+    item = await session.scalar(
+        select(ActionItem).where(ActionItem.id == item_id, ActionItem.document_id == document_id)
+    )
+    if item is None:
+        return None
+    if urgency is not None:
+        item.urgency = urgency
+    if recommendation is not None:
+        item.recommendation = recommendation
+    await session.commit()
+    await session.refresh(item)
+    return item
+
+
+@dataclass(frozen=True)
+class BuyerReport:
+    """The public, buyer-facing view of a report -- see get_buyer_report.
+
+    `status` is always present. Every other field stays at its default
+    while status is "pending_review" -- get_buyer_report never populates
+    them in that case, which is the actual liability boundary the review
+    gate exists to enforce, enforced in the one function every
+    unauthenticated caller goes through rather than trusted to the API
+    route or the frontend to withhold.
+    """
+
+    status: str
+    title: str | None = None
+    inspector_name: str | None = None
+    created_at: datetime | None = None
+    systems: list[SystemRecord] = field(default_factory=list)
+    findings_by_system: dict[uuid.UUID, list[str]] = field(default_factory=dict)
+    action_items: list[ActionItem] = field(default_factory=list)
+
+
+async def get_buyer_report(session: AsyncSession, document_id: uuid.UUID) -> BuyerReport | None:
+    """The public, unauthenticated view of a report -- what
+    GET /documents/{id}/buyer-report returns. None if the document has no
+    inspection event at all (home report never generated, or the document
+    doesn't exist).
+    """
+    event = await _get_event(session, document_id)
+    if event is None:
+        return None
+
+    if event.status == "pending_review":
+        return BuyerReport(status=event.status)
+
+    document = await ingestion_service.get_document(session, document_id)
+    if document is None:
+        return None
+
+    inspector_name = None
+    if document.inspector_id is not None:
+        inspector = await auth_service.get_inspector(session, document.inspector_id)
+        inspector_name = inspector.name if inspector is not None else None
+
+    records = await get_home_report(session, document_id)
+    findings_by_system = {record.id: await get_findings(session, record.id) for record in records}
+    action_items = await get_action_plan(session, document_id)
+
+    return BuyerReport(
+        status=event.status,
+        title=document.title,
+        inspector_name=inspector_name,
+        created_at=document.created_at,
+        systems=records,
+        findings_by_system=findings_by_system,
+        action_items=action_items,
+    )

@@ -8,20 +8,27 @@ import {
   ApiError,
   type ActionItem,
   type ActionPlan,
+  type BuyerReport,
+  type BuyerReportSystem,
   type Document,
+  type EventStatus,
   type HomeReport,
-  type HomeSystem,
 } from "@/lib/api";
 import {
   SYSTEM_LABELS,
   URGENCY_LABELS,
   URGENCY_TIERS,
   TYPICAL_LIFESPAN_YEARS,
+  EVENT_STATUS_LABEL,
+  COST_DISCLAIMER,
   formatCostRange,
   isSafetyHazard,
+  reportDisclaimer,
 } from "@/lib/format";
 
-function nextRecommendedAction(system: HomeSystem, items: ActionItem[]): ActionItem | null {
+type ViewSystem = BuyerReportSystem;
+
+function nextRecommendedAction(system: ViewSystem, items: ActionItem[]): ActionItem | null {
   const matches = items.filter((item) => item.system === system.name);
   if (matches.length === 0) return null;
   return [...matches].sort(
@@ -40,63 +47,62 @@ function SafetyTag() {
   );
 }
 
-export default function TimelinePage() {
-  const params = useParams<{ id: string }>();
-  const [document, setDocument] = useState<Document | null>(null);
-  const [homeReport, setHomeReport] = useState<HomeReport | null>(null);
-  const [actionPlan, setActionPlan] = useState<ActionPlan | null>(null);
-  const [error, setError] = useState<string | null>(null);
+function StatusBadge({ status }: { status: string }) {
+  const tone = status === "pending_review" ? "bg-ochre-soft text-ochre" : "bg-sage-soft text-sage";
+  return (
+    <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold tracking-wide uppercase ${tone}`}>
+      {EVENT_STATUS_LABEL[status] ?? status}
+    </span>
+  );
+}
 
-  useEffect(() => {
-    Promise.all([
-      api.getDocument(params.id),
-      api.getHomeReport(params.id),
-      api.getActionPlan(params.id),
-    ])
-      .then(([document, homeReport, actionPlan]) => {
-        setDocument(document);
-        setHomeReport(homeReport);
-        setActionPlan(actionPlan);
-      })
-      .catch((caught) =>
-        setError(
-          caught instanceof ApiError
-            ? caught.message
-            : "Something went wrong. Check the browser console.",
-        ),
-      );
-  }, [params.id]);
+// Cost lives in its own visually distinct block, separate from the urgency
+// pill and recommendation above it, with the disclaimer attached directly
+// to it -- same treatment as the main report page.
+function CostBlock({ item }: { item: ActionItem }) {
+  return (
+    <div className="mt-3 rounded-xl border border-dashed border-line bg-surface-sunk px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full bg-ochre-soft px-2 py-0.5 text-[10px] font-semibold tracking-wide text-ochre uppercase">
+          AI cost estimate
+        </span>
+        <span className="font-mono text-sm font-semibold tabular-nums text-ink">
+          {formatCostRange(item.cost_low, item.cost_high)}
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-ink-faint">{COST_DISCLAIMER}</p>
+    </div>
+  );
+}
 
-  if (error) {
-    return (
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
-        <p className="text-sm text-brick">{error}</p>
-        <Link href="/upload" className="mt-4 text-sm font-medium text-accent underline underline-offset-2">
-          Upload another report
-        </Link>
-      </main>
-    );
-  }
-
-  if (!document || !homeReport || !actionPlan) {
-    return (
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
-        <p className="text-sm text-ink-soft">Loading your timeline…</p>
-      </main>
-    );
-  }
-
+function TimelineBody({
+  title,
+  createdAt,
+  inspectorName,
+  status,
+  systems,
+  actionItems,
+  backHref,
+}: {
+  title: string;
+  createdAt: string;
+  inspectorName: string | null;
+  status: string | null;
+  systems: ViewSystem[];
+  actionItems: ActionItem[];
+  backHref: string;
+}) {
   // The report never states an inspection date today, so the document's
   // upload date is the closest thing to "now" for backing out an install
   // year from the AI's estimated system age.
-  const asOfYear = new Date(document.created_at).getFullYear();
+  const asOfYear = new Date(createdAt).getFullYear();
 
-  const entries = homeReport.systems
+  const entries = systems
     .map((system) => ({
       system,
       installYear:
         system.estimated_age_years !== null ? asOfYear - system.estimated_age_years : null,
-      action: nextRecommendedAction(system, actionPlan.items),
+      action: nextRecommendedAction(system, actionItems),
     }))
     // Oldest install first, so the page reads as a timeline. Systems with an
     // unknown age can't be placed on it, so they fall to the end.
@@ -110,20 +116,24 @@ export default function TimelinePage() {
   return (
     <main className="mx-auto w-full max-w-3xl px-6 py-14">
       <Link
-        href={`/reports/${document.id}`}
+        href={backHref}
         className="text-xs font-medium text-ink-faint underline underline-offset-2 hover:text-ink"
       >
         ← Back to report
       </Link>
 
       <header className="mt-5 mb-12">
-        <h1 className="font-display text-3xl font-medium tracking-tight">System timeline</h1>
-        <p className="mt-2 text-sm text-ink-soft">{document.title}</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="font-display text-3xl font-medium tracking-tight">System timeline</h1>
+          {status && <StatusBadge status={status} />}
+        </div>
+        <p className="mt-2 text-sm text-ink-soft">{title}</p>
         <p className="mt-4 text-xs text-ink-faint">
           Install years and remaining life below are calculated, not measured: install year is
           back-dated from the report&apos;s estimated system age, and lifespan uses typical
           industry ranges for that type of system — not an assessment of this specific unit.
         </p>
+        <p className="mt-2 text-xs text-ink-faint">{reportDisclaimer(inspectorName)}</p>
       </header>
 
       {entries.length === 0 ? (
@@ -174,15 +184,13 @@ export default function TimelinePage() {
                             {URGENCY_LABELS[action.urgency] ?? action.urgency}
                           </span>
                           {isSafetyHazard(action.recommendation, ...system.findings) && <SafetyTag />}
-                          <span className="ml-auto font-mono text-xs font-semibold tabular-nums text-accent">
-                            {formatCostRange(action.cost_low, action.cost_high)}
-                          </span>
                         </>
                       )}
                     </div>
                     <p className={`mt-2 text-[13.5px] leading-relaxed ${action ? "text-ink" : "text-ink-faint"}`}>
                       {action ? action.recommendation : "None at this time."}
                     </p>
+                    {action && <CostBlock item={action} />}
                   </div>
                 </div>
               </li>
@@ -191,5 +199,131 @@ export default function TimelinePage() {
         </ol>
       )}
     </main>
+  );
+}
+
+type Mode = "loading" | "inspector" | "buyer" | "error";
+
+export default function TimelinePage() {
+  const params = useParams<{ id: string }>();
+  const [mode, setMode] = useState<Mode>("loading");
+  const [error, setError] = useState<string | null>(null);
+
+  const [document, setDocument] = useState<Document | null>(null);
+  const [inspectorName, setInspectorName] = useState<string | null>(null);
+  const [homeReport, setHomeReport] = useState<HomeReport | null>(null);
+  const [actionPlan, setActionPlan] = useState<ActionPlan | null>(null);
+  const [eventStatus, setEventStatus] = useState<EventStatus | null>(null);
+
+  const [buyerReport, setBuyerReport] = useState<BuyerReport | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBuyerView() {
+      try {
+        const report = await api.getBuyerReport(params.id);
+        if (cancelled) return;
+        setBuyerReport(report);
+        setMode("buyer");
+      } catch (caught) {
+        if (cancelled) return;
+        setError(
+          caught instanceof ApiError
+            ? caught.message
+            : "Something went wrong. Check the browser console.",
+        );
+        setMode("error");
+      }
+    }
+
+    api
+      .getDocument(params.id)
+      .then(async (doc) => {
+        const [me, home, plan, status] = await Promise.all([
+          api.me(),
+          api.getHomeReport(params.id),
+          api.getActionPlan(params.id),
+          api.getEventStatus(params.id),
+        ]);
+        if (cancelled) return;
+        setDocument(doc);
+        setInspectorName(me.name);
+        setHomeReport(home);
+        setActionPlan(plan);
+        setEventStatus(status);
+        setMode("inspector");
+      })
+      .catch(() => {
+        if (!cancelled) loadBuyerView();
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [params.id]);
+
+  if (mode === "loading") {
+    return (
+      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+        <p className="text-sm text-ink-soft">Loading your timeline…</p>
+      </main>
+    );
+  }
+
+  if (mode === "error") {
+    return (
+      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+        <p className="text-sm text-brick">{error}</p>
+        <Link href="/upload" className="mt-4 text-sm font-medium text-accent underline underline-offset-2">
+          Upload another report
+        </Link>
+      </main>
+    );
+  }
+
+  if (mode === "buyer") {
+    const report = buyerReport as BuyerReport;
+
+    if (report.status === "pending_review") {
+      return (
+        <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+          <h1 className="font-display text-2xl font-medium tracking-tight">Almost ready</h1>
+          <p className="mt-3 text-sm text-ink-soft">
+            Your inspector is still reviewing this report. Check back soon — you&apos;ll see the
+            full system timeline here once it&apos;s approved.
+          </p>
+        </main>
+      );
+    }
+
+    return (
+      <TimelineBody
+        title={report.title ?? ""}
+        createdAt={report.created_at ?? new Date().toISOString()}
+        inspectorName={report.inspector_name}
+        status={report.status}
+        systems={report.systems}
+        actionItems={report.action_items}
+        backHref={`/reports/${report.document_id}`}
+      />
+    );
+  }
+
+  const doc = document as Document;
+  const home = homeReport as HomeReport;
+  const plan = actionPlan as ActionPlan;
+  const status = eventStatus as EventStatus;
+
+  return (
+    <TimelineBody
+      title={doc.title}
+      createdAt={doc.created_at}
+      inspectorName={inspectorName}
+      status={status.status}
+      systems={home.systems}
+      actionItems={plan.items}
+      backHref={`/reports/${doc.id}`}
+    />
   );
 }

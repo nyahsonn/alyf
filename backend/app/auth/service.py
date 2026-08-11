@@ -54,6 +54,16 @@ async def get_inspector_by_email(session: AsyncSession, email: str) -> Inspector
     return await session.scalar(select(Inspector).where(Inspector.email == email))
 
 
+async def get_inspector(session: AsyncSession, inspector_id: uuid.UUID) -> Inspector | None:
+    """Used by other modules that need to display an inspector's own name
+    (e.g. extraction/service.py's buyer-facing report) -- kept here rather
+    than a raw `session.get(Inspector, ...)` in that module, since auth owns
+    the `inspectors` table (see README, "modules talk to their neighbours
+    only through service calls").
+    """
+    return await session.get(Inspector, inspector_id)
+
+
 async def create_inspector(session: AsyncSession, payload: SignupRequest) -> Inspector:
     inspector = Inspector(
         email=payload.email.lower(),

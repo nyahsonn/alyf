@@ -102,6 +102,16 @@ class InspectionEvent(Base):
     One row per document -- see `extract_home_report`, which replaces an
     event (and, via cascade, its systems and findings) on every re-run for
     the same document, the same idempotent-rerun pattern `Fact` uses.
+
+    `status` is the review/approval gate between the AI-generated draft and
+    what a buyer is allowed to see: `pending_review` (default, set the
+    moment an event is created) -> `approved` (the inspector reviewed and
+    signed off) or `auto_sent` (the inspector never acted within the
+    auto-send window, see `auto_send_stale_events`). There is no separate
+    "sent" step beyond that -- this product has no manual send action today,
+    so both terminal states mean the same thing to a buyer: the report is
+    now visible at its link. `reviewed_at` is set whichever way status
+    leaves `pending_review`.
     """
 
     __tablename__ = "events"
@@ -120,6 +130,8 @@ class InspectionEvent(Base):
     )
     # Not yet extracted by the pipeline -- left for a future enhancement.
     inspection_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending_review")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -185,6 +197,11 @@ class ActionItem(Base):
     recommendation: Mapped[str] = mapped_column(Text, nullable=False)
     cost_low: Mapped[int] = mapped_column(Integer, nullable=False)
     cost_high: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Where cost_low/cost_high came from -- "ai_estimated" today, set here in
+    # code rather than asked of Claude. The seam a real pricing API (e.g.
+    # RSMeans) swaps into later without a schema change: persist a different
+    # value here once cost_low/cost_high come from that source instead.
+    cost_source: Mapped[str] = mapped_column(String(30), nullable=False, default="ai_estimated")
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

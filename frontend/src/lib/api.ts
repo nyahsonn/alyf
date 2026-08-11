@@ -51,6 +51,8 @@ export type HomeSystem = {
   condition: string;
   condition_confidence: number;
   findings: string[];
+  /** Parallel to `findings` -- same order, same length. */
+  finding_ids: string[];
   findings_confidence: number;
   created_at: string;
 };
@@ -68,12 +70,49 @@ export type ActionItem = {
   recommendation: string;
   cost_low: number;
   cost_high: number;
+  cost_source: string;
   created_at: string;
 };
 
 export type ActionPlan = {
   document_id: string;
   items: ActionItem[];
+};
+
+/** A report's review status -- see backend InspectionEvent.status. */
+export type EventStatus = {
+  status: "pending_review" | "approved" | "auto_sent";
+  reviewed_at: string | null;
+};
+
+export type Finding = {
+  id: string;
+  document_id: string;
+  text: string;
+};
+
+export type BuyerReportSystem = {
+  id: string;
+  name: string;
+  estimated_age_years: number | null;
+  estimated_age_confidence: number;
+  condition: string;
+  condition_confidence: number;
+  findings: string[];
+  findings_confidence: number;
+};
+
+/** The public, unauthenticated view of a report -- what a buyer sees at its
+ * link. Every field but `status`/`document_id` is absent while
+ * status === "pending_review". */
+export type BuyerReport = {
+  status: "pending_review" | "approved" | "auto_sent";
+  document_id: string;
+  title: string | null;
+  inspector_name: string | null;
+  created_at: string | null;
+  systems: BuyerReportSystem[];
+  action_items: ActionItem[];
 };
 
 export type EvidenceItem = {
@@ -229,6 +268,31 @@ export const api = {
 
   getActionPlan: (documentId: string) =>
     request<ActionPlan>(`/documents/${documentId}/action-plan`),
+
+  getEventStatus: (documentId: string) =>
+    request<EventStatus>(`/documents/${documentId}/status`),
+
+  approveEvent: (documentId: string) =>
+    request<EventStatus>(`/documents/${documentId}/approve`, { method: "POST" }),
+
+  updateFinding: (documentId: string, findingId: string, text: string) =>
+    request<Finding>(`/documents/${documentId}/findings/${findingId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ text }),
+    }),
+
+  updateActionItem: (
+    documentId: string,
+    itemId: string,
+    input: { urgency?: string; recommendation?: string },
+  ) =>
+    request<ActionItem>(`/documents/${documentId}/action-items/${itemId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  getBuyerReport: (documentId: string) =>
+    request<BuyerReport>(`/documents/${documentId}/buyer-report`),
 
   ask: (input: { question: string; document_id?: string; top_k?: number }) =>
     request<Answer>("/ask", { method: "POST", body: JSON.stringify(input) }),
