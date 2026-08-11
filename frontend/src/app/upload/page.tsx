@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, type Document } from "@/lib/api";
+import { Logo } from "@/components/Logo";
 
 type Stage = "idle" | "uploading" | "home-report" | "action-plan" | "error";
 
@@ -103,7 +104,7 @@ export default function UploadPage() {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-6 py-14">
       <div className="flex items-center justify-between">
-        <h1 className="font-display text-3xl font-medium tracking-tight italic">ALYF</h1>
+        <Logo height={32} />
         <button
           type="button"
           onClick={() => api.logout().finally(() => router.push("/login"))}

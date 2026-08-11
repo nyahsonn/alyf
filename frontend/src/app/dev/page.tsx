@@ -14,6 +14,7 @@ import {
   type Report,
 } from "@/lib/api";
 import { SYSTEM_LABELS, URGENCY_LABELS, formatCostRange } from "@/lib/format";
+import { Logo } from "@/components/Logo";
 
 const SAMPLE_TEXT = `Property: 482 Birchwood Lane
 Inspection Date: 2026-08-01
@@ -198,7 +199,7 @@ export default function Home() {
     <main className="mx-auto w-full max-w-5xl px-6 py-10">
       <header className="mb-8">
         <div className="flex items-start justify-between gap-4">
-          <h1 className="text-3xl font-semibold tracking-tight">ALYF</h1>
+          <Logo height={28} />
           <button
             type="button"
             onClick={() => api.logout().finally(() => router.push("/login"))}

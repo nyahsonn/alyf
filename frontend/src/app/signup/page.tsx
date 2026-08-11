@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, googleLoginUrl } from "@/lib/api";
+import { Logo } from "@/components/Logo";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -33,8 +34,8 @@ export default function SignupPage() {
   return (
     <main className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center px-6 py-14">
       <header className="mb-8 text-center">
-        <h1 className="font-display text-3xl font-medium tracking-tight italic">ALYF</h1>
-        <p className="mt-2 text-sm text-ink-soft">Create your inspector account.</p>
+        <Logo height={40} />
+        <p className="mt-3 text-sm text-ink-soft">Create your inspector account.</p>
       </header>
 
       {error && (

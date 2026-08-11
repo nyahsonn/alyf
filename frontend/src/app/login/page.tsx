@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, googleLoginUrl } from "@/lib/api";
+import { Logo } from "@/components/Logo";
 
 const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   google_failed: "Google sign-in didn't go through. Please try again.",
@@ -56,8 +57,8 @@ export default function LoginPage() {
       </Suspense>
 
       <header className="mb-8 text-center">
-        <h1 className="font-display text-3xl font-medium tracking-tight italic">ALYF</h1>
-        <p className="mt-2 text-sm text-ink-soft">Log in to your inspector account.</p>
+        <Logo height={40} className="mx-auto" />
+        <p className="mt-3 text-sm text-ink-soft">Log in to your inspector account.</p>
       </header>
 
       {error && (

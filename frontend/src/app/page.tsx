@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { Logo } from "@/components/Logo";
 
 export default function LandingPage() {
   const router = useRouter();
@@ -37,7 +38,7 @@ export default function LandingPage() {
       />
 
       <div className="relative mx-auto w-full max-w-5xl px-6 py-16 sm:py-20">
-        <p className="font-display text-lg font-medium italic text-ink">ALYF</p>
+        <Logo height={28} />
 
         <div className="mt-10 grid items-center gap-14 lg:mt-16 lg:grid-cols-[1.1fr_1fr] lg:gap-10">
           <div>
