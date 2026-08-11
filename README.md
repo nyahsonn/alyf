@@ -268,6 +268,7 @@ Chunking is tunable in `backend/app/core/config.py` — `chunk_size_words` (180)
 | Variable              | Default                 | Notes                                                    |
 | --------------------- | ----------------------- | -------------------------------------------------------- |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | `NEXT_PUBLIC_` values ship in the browser bundle — no secrets |
+| `NEXT_PUBLIC_SENTRY_DSN` | — | From a **separate** Sentry project than the backend's — see [Error monitoring](#error-monitoring) |
 
 ## Inspector accounts
 
@@ -375,6 +376,8 @@ shows in its existing error-banner.
 
 ## Error monitoring
 
+### Backend
+
 Three request paths call out to something that can fail for reasons entirely
 outside ALYF's control: Document AI (OCR on upload), and Claude (home-report
 and action-plan generation). All three already catch that failure and turn it
@@ -412,6 +415,36 @@ seeing them — each one now also calls `sentry_sdk.capture_exception(e)` inside
 a scope tagged with `document_id` (or the upload's filename, before a document
 exists yet) and which stage failed, so the alert says *which report* broke, not
 just that something did.
+
+### Frontend
+
+A **separate** Sentry project from the backend's — mixing a Next.js hydration
+error and a Claude API failure into one project's issue stream makes both
+harder to read, and the two apps fail independently of each other anyway.
+
+**Setup:**
+1. In the same Sentry organization, create a second project — platform
+   **Next.js** this time.
+2. Copy its DSN into `frontend/.env.local` as `NEXT_PUBLIC_SENTRY_DSN`. The
+   `NEXT_PUBLIC_` prefix is correct here, not a mistake — a DSN is meant to
+   ship inside client-side bundles (that's how the browser reports its own
+   errors), unlike an actual secret. Left blank, `Sentry.init` still runs but
+   has nothing to send to.
+3. Same email-by-default / Slack-needs-one-step story as the backend project
+   above — it's a separate project, so it needs its own alert rule looked at
+   if you want Slack there too.
+
+**How it's wired:** `@sentry/nextjs` needs three things: `frontend/src/instrumentation.ts`
+(Next.js's own hook, not Sentry-specific — `register()` runs once per server
+runtime and initializes Sentry for it; `onRequestError` captures server-side
+request errors), `frontend/src/instrumentation-client.ts` (same idea for the
+browser — this exact filename is a Next.js convention Sentry's build plugin
+looks for), and `next.config.ts` wrapped in `withSentryConfig`. No
+`org`/`project`/`authToken` are set on that last one, so source maps are never
+uploaded — captured errors show minified stack traces rather than readable
+ones, which is fine for "did this break" alerting but not for reading exactly
+which line failed. Add those three (from Sentry's project settings) once you
+want symbolicated traces; nothing else about the setup changes.
 
 ## Weekly roadmap reminders
 
@@ -555,6 +588,8 @@ frontend/
   src/app/          Next.js App Router pages
   src/proxy.ts      redirects to /login if the session cookie is absent
   src/lib/api.ts    typed client for the backend
+  src/instrumentation.ts         Sentry init, server/edge runtimes
+  src/instrumentation-client.ts  Sentry init, browser
 data/samples/       example input documents
 db/init/            SQL run on first container start (extensions)
 docker-compose.yml  database + Adminer
