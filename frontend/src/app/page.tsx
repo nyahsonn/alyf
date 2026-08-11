@@ -38,7 +38,7 @@ export default function LandingPage() {
       />
 
       <div className="relative mx-auto w-full max-w-5xl px-6 py-16 sm:py-20">
-        <Logo height={28} />
+        <Logo height={64} />
 
         <div className="mt-10 grid items-center gap-14 lg:mt-16 lg:grid-cols-[1.1fr_1fr] lg:gap-10">
           <div>

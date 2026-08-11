@@ -34,7 +34,7 @@ export default function SignupPage() {
   return (
     <main className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center px-6 py-14">
       <header className="mb-8 text-center">
-        <Logo height={40} />
+        <Logo height={120} className="mx-auto" />
         <p className="mt-3 text-sm text-ink-soft">Create your inspector account.</p>
       </header>
 

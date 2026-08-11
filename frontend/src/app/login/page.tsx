@@ -57,7 +57,7 @@ export default function LoginPage() {
       </Suspense>
 
       <header className="mb-8 text-center">
-        <Logo height={40} className="mx-auto" />
+        <Logo height={120} className="mx-auto" />
         <p className="mt-3 text-sm text-ink-soft">Log in to your inspector account.</p>
       </header>
 

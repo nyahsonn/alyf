@@ -199,7 +199,7 @@ export default function Home() {
     <main className="mx-auto w-full max-w-5xl px-6 py-10">
       <header className="mb-8">
         <div className="flex items-start justify-between gap-4">
-          <Logo height={28} />
+          <Logo height={56} />
           <button
             type="button"
             onClick={() => api.logout().finally(() => router.push("/login"))}

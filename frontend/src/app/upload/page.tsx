@@ -104,7 +104,7 @@ export default function UploadPage() {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-6 py-14">
       <div className="flex items-center justify-between">
-        <Logo height={32} />
+        <Logo height={64} />
         <button
           type="button"
           onClick={() => api.logout().finally(() => router.push("/login"))}
