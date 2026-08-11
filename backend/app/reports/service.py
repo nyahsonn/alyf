@@ -25,9 +25,13 @@ class DocumentNotFoundError(Exception):
     """Raised when a report is requested for a document that does not exist."""
 
 
-async def build_report(session: AsyncSession, payload: ReportCreate) -> Report:
+async def build_report(
+    session: AsyncSession, payload: ReportCreate, inspector_id: uuid.UUID
+) -> Report:
     document = await ingestion_service.get_document(session, payload.document_id)
-    if document is None:
+    # Same DocumentNotFoundError either way -- "doesn't exist" and "isn't
+    # yours" must not be distinguishable from the response.
+    if document is None or document.inspector_id != inspector_id:
         raise DocumentNotFoundError(str(payload.document_id))
 
     facts = [
@@ -132,15 +136,32 @@ def _render_markdown(
 
 async def list_reports(
     session: AsyncSession,
+    inspector_id: uuid.UUID,
     document_id: uuid.UUID | None = None,
     limit: int = 50,
 ) -> list[Report]:
-    query = select(Report).order_by(Report.created_at.desc()).limit(limit)
+    # Reports have no inspector_id of their own -- scoped through a join to
+    # the owning document instead, the same "reads across other modules"
+    # this module already does everywhere else.
+    query = (
+        select(Report)
+        .join(Document, Report.document_id == Document.id)
+        .where(Document.inspector_id == inspector_id)
+        .order_by(Report.created_at.desc())
+        .limit(limit)
+    )
     if document_id is not None:
         query = query.where(Report.document_id == document_id)
     result = await session.execute(query)
     return list(result.scalars())
 
 
-async def get_report(session: AsyncSession, report_id: uuid.UUID) -> Report | None:
-    return await session.get(Report, report_id)
+async def get_report(
+    session: AsyncSession, report_id: uuid.UUID, inspector_id: uuid.UUID
+) -> Report | None:
+    query = (
+        select(Report)
+        .join(Document, Report.document_id == Document.id)
+        .where(Report.id == report_id, Document.inspector_id == inspector_id)
+    )
+    return await session.scalar(query)

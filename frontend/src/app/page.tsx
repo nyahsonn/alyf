@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   api,
   ApiError,
@@ -31,6 +32,8 @@ wall; it appears cosmetic rather than structural, with no signs of water
 intrusion. Condition: Good.`;
 
 export default function Home() {
+  const router = useRouter();
+  const [checkingAuth, setCheckingAuth] = useState(true);
   const [health, setHealth] = useState<DbHealth | null>(null);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -74,13 +77,21 @@ export default function Home() {
 
   useEffect(() => {
     api
+      .me()
+      .then(() => setCheckingAuth(false))
+      .catch(() => router.replace("/login"));
+  }, [router]);
+
+  useEffect(() => {
+    if (checkingAuth) return;
+    api
       .health()
       .then(setHealth)
       .catch(() => setHealth(null));
     refreshDocuments().catch(() => {
       /* surfaced by the connection banner */
     });
-  }, [refreshDocuments]);
+  }, [checkingAuth, refreshDocuments]);
 
   const selectDocument = (documentId: string) =>
     run("select", async () => {
@@ -175,12 +186,29 @@ export default function Home() {
   const selected =
     documents.find((document) => document.id === selectedId) ?? null;
 
+  if (checkingAuth) {
+    return (
+      <main className="mx-auto w-full max-w-5xl px-6 py-10">
+        <p className="text-sm text-neutral-500 dark:text-neutral-400">One moment…</p>
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto w-full max-w-5xl px-6 py-10">
       <header className="mb-8">
-        <h1 className="text-3xl font-semibold tracking-tight">ALYF</h1>
+        <div className="flex items-start justify-between gap-4">
+          <h1 className="text-3xl font-semibold tracking-tight">ALYF</h1>
+          <button
+            type="button"
+            onClick={() => api.logout().finally(() => router.push("/login"))}
+            className="text-xs font-medium text-neutral-500 underline underline-offset-2 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200"
+          >
+            Log out
+          </button>
+        </div>
         <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-          Ingest → extract → reason → report
+          Ingest → extract → reason → report — dev/testing harness, your own documents only
         </p>
         <StatusBanner health={health} />
       </header>

@@ -24,6 +24,17 @@ class Insight(Base):
         nullable=True,
         index=True,
     )
+    # document_id above can be null (a question asked across every document
+    # rather than one), so ownership can't always be reached by joining
+    # through Document the way Report does -- stamped directly here instead,
+    # from the asking inspector (see app/auth), so list_insights can always
+    # scope to "mine" regardless of whether a specific document was named.
+    inspector_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("inspectors.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     question: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     # List of {"fact_id": ..., "score": ..., "label": ...} dicts.

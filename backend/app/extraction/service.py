@@ -246,8 +246,16 @@ def _normalize_address(address: str) -> str:
     return _WHITESPACE_RE.sub(" ", address.strip().lower()).rstrip(".,")
 
 
-async def _resolve_home(session: AsyncSession, address: str | None) -> Home:
-    """The home this address already belongs to, or a newly created one.
+async def _resolve_home(
+    session: AsyncSession, address: str | None, inspector_id: uuid.UUID | None
+) -> Home:
+    """The home this address already belongs to *for this inspector*, or a
+    newly created one.
+
+    Scoped by inspector_id as well as address: without that, two different
+    inspectors reporting on the same address would resolve to the same Home
+    row, and each would see the other's findings through that collision --
+    see Home's docstring in extraction/models.py.
 
     Flushes so the caller can use `home.id` as a foreign key right away --
     these models use bare FK columns rather than relationship kwargs (see
@@ -256,11 +264,15 @@ async def _resolve_home(session: AsyncSession, address: str | None) -> Home:
     """
     normalized = _normalize_address(address) if address else None
     if normalized is not None:
-        existing = await session.scalar(select(Home).where(Home.normalized_address == normalized))
+        existing = await session.scalar(
+            select(Home).where(
+                Home.normalized_address == normalized, Home.inspector_id == inspector_id
+            )
+        )
         if existing is not None:
             return existing
 
-    home = Home(address=address, normalized_address=normalized)
+    home = Home(address=address, normalized_address=normalized, inspector_id=inspector_id)
     session.add(home)
     await session.flush()
     return home
@@ -295,7 +307,7 @@ async def extract_home_report(
     # so this one delete replaces the whole tree for this document.
     await session.execute(delete(InspectionEvent).where(InspectionEvent.document_id == document_id))
 
-    home = await _resolve_home(session, report.address.address)
+    home = await _resolve_home(session, report.address.address, document.inspector_id)
 
     event = InspectionEvent(home_id=home.id, document_id=document_id)
     session.add(event)

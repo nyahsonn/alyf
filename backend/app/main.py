@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.router import api_router
 from app.core.config import settings
@@ -55,6 +56,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Backs authlib's transient state/nonce during the Google OAuth redirect
+# round-trip (app/auth/oauth.py, app/api/routes/auth.py) -- unrelated to
+# and separate from our own long-lived alyf_session JWT cookie.
+app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
 
 app.include_router(api_router, prefix=settings.api_prefix)
 

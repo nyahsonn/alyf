@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.embeddings import embed_text
 from app.extraction.models import Fact
+from app.ingestion.models import Document
 from app.reasoning.models import Insight
 from app.reasoning.schemas import AnswerRead, AskRequest, EvidenceItem
 
@@ -23,17 +24,27 @@ _WHITESPACE_RE = re.compile(r"\s+")
 async def search_facts(
     session: AsyncSession,
     query: str,
+    inspector_id: uuid.UUID,
     document_id: uuid.UUID | None = None,
     top_k: int = 5,
 ) -> list[tuple[Fact, float]]:
-    """Nearest-neighbour search over fact embeddings.
+    """Nearest-neighbour search over fact embeddings, scoped to the asking
+    inspector's own documents -- always, via a join to Document, whether or
+    not a specific document_id is also given. Without this, a caller that
+    omits document_id would search every inspector's facts.
 
     Returns (fact, similarity) pairs ordered most-relevant first.
     """
     query_vector = embed_text(query)
     distance = Fact.embedding.cosine_distance(query_vector)
 
-    statement = select(Fact, distance.label("distance")).order_by(distance).limit(top_k)
+    statement = (
+        select(Fact, distance.label("distance"))
+        .join(Document, Fact.document_id == Document.id)
+        .where(Document.inspector_id == inspector_id)
+        .order_by(distance)
+        .limit(top_k)
+    )
     if document_id is not None:
         statement = statement.where(Fact.document_id == document_id)
 
@@ -81,10 +92,11 @@ def compose_answer(question: str, matches: list[tuple[Fact, float]]) -> str:
     return "\n".join(lines)
 
 
-async def ask(session: AsyncSession, payload: AskRequest) -> AnswerRead:
+async def ask(session: AsyncSession, payload: AskRequest, inspector_id: uuid.UUID) -> AnswerRead:
     matches = await search_facts(
         session,
         query=payload.question,
+        inspector_id=inspector_id,
         document_id=payload.document_id,
         top_k=payload.top_k,
     )
@@ -106,6 +118,7 @@ async def ask(session: AsyncSession, payload: AskRequest) -> AnswerRead:
     if payload.persist:
         insight = Insight(
             document_id=payload.document_id,
+            inspector_id=inspector_id,
             question=payload.question,
             answer=answer_text,
             evidence=[item.model_dump(mode="json") for item in evidence],
@@ -125,10 +138,16 @@ async def ask(session: AsyncSession, payload: AskRequest) -> AnswerRead:
 
 async def list_insights(
     session: AsyncSession,
+    inspector_id: uuid.UUID,
     document_id: uuid.UUID | None = None,
     limit: int = 50,
 ) -> list[Insight]:
-    query = select(Insight).order_by(Insight.created_at.desc()).limit(limit)
+    query = (
+        select(Insight)
+        .where(Insight.inspector_id == inspector_id)
+        .order_by(Insight.created_at.desc())
+        .limit(limit)
+    )
     if document_id is not None:
         query = query.where(Insight.document_id == document_id)
     result = await session.execute(query)

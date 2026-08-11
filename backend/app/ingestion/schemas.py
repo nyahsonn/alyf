@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class DocumentCreate(BaseModel):
@@ -13,6 +13,7 @@ class DocumentCreate(BaseModel):
     source_ref: str | None = Field(default=None, max_length=1000)
     file_bytes: bytes | None = Field(default=None)
     file_sha256: str | None = Field(default=None, max_length=64)
+    notify_email: EmailStr | None = Field(default=None)
 
 
 class ChunkRead(BaseModel):
@@ -33,6 +34,7 @@ class DocumentRead(BaseModel):
     source_ref: str | None
     status: str
     file_sha256: str | None
+    notify_email: str | None
     created_at: datetime
 
 

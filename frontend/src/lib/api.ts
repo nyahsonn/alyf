@@ -6,10 +6,14 @@
  * so never put secrets in them.
  */
 
-const API_BASE =
+export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
 
 export const API_PREFIX = "/api/v1";
+
+/** Full-page navigation target for "Continue with Google" -- a real link,
+ * not fetch(), since the provider's own login screen has to load. */
+export const googleLoginUrl = `${API_BASE}${API_PREFIX}/auth/google/login`;
 
 export type Document = {
   id: string;
@@ -17,6 +21,7 @@ export type Document = {
   source_type: string;
   source_ref: string | null;
   status: string;
+  notify_email: string | null;
   created_at: string;
 };
 
@@ -104,6 +109,13 @@ export type DbHealth = {
   embedding_dimensions: number;
 };
 
+export type Inspector = {
+  id: string;
+  email: string;
+  name: string | null;
+  created_at: string;
+};
+
 /** Thrown for any non-2xx response, carrying the backend's detail message. */
 export class ApiError extends Error {
   constructor(
@@ -126,6 +138,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
           : { "Content-Type": "application/json" }),
         ...init?.headers,
       },
+      // Required for the browser to send/receive the httpOnly session
+      // cookie cross-port (frontend on :3000, backend on :8000 in dev --
+      // different origins even though both are "localhost").
+      credentials: "include",
       cache: "no-store",
     });
   } catch {
@@ -156,6 +172,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<DbHealth>("/health/db"),
 
+  signup: (input: { email: string; password: string; name?: string }) =>
+    request<Inspector>("/auth/signup", { method: "POST", body: JSON.stringify(input) }),
+
+  login: (input: { email: string; password: string }) =>
+    request<Inspector>("/auth/login", { method: "POST", body: JSON.stringify(input) }),
+
+  logout: () => request<void>("/auth/logout", { method: "POST" }),
+
+  me: () => request<Inspector>("/auth/me"),
+
   listDocuments: () => request<Document[]>("/documents"),
 
   createDocument: (input: { title: string; content: string }) =>
@@ -164,9 +190,10 @@ export const api = {
       body: JSON.stringify({ ...input, source_type: "text" }),
     }),
 
-  uploadDocument: (file: File) => {
+  uploadDocument: (file: File, notifyEmail?: string) => {
     const form = new FormData();
     form.append("file", file);
+    if (notifyEmail) form.append("notify_email", notifyEmail);
     return request<Document>("/documents/upload", {
       method: "POST",
       body: form,
@@ -175,6 +202,9 @@ export const api = {
 
   deleteDocument: (documentId: string) =>
     request<void>(`/documents/${documentId}`, { method: "DELETE" }),
+
+  unsubscribe: (documentId: string) =>
+    request<void>(`/documents/${documentId}/notify-email`, { method: "DELETE" }),
 
   extract: (documentId: string) =>
     request<ExtractionResult>(`/documents/${documentId}/extract`, {

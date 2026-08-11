@@ -21,7 +21,10 @@ ingestion  ->  extraction  ->  reasoning  ->  reports
 
 Each module owns its own tables, schemas, and service functions, and talks to its
 neighbours only through service calls — never by querying another module's tables.
-`reports` is the only stage that reads across the others.
+`reports` was originally the only stage that read across the others; `reasoning` and
+`notifications` now do too, both for the same reason — scoping a query to the logged-in
+inspector's own data (see [Inspector accounts](#inspector-accounts)) requires joining
+out to `ingestion`'s `documents` table.
 
 **Most of it runs entirely offline.** No API keys, no model downloads. The embedder is a
 deterministic hashing embedder and the generic extractor is rule-based, so you can stand
@@ -101,14 +104,21 @@ and generate a report, with a banner showing backend and database health.
 
 `data/samples/sample-inspection-report.md` is a short home inspection report covering
 the six systems ALYF tracks, written in the shape the rule-based extractor also
-recognises (`Label: value` lines plus prose with figures). Paste it into the UI, or
-upload it directly:
+recognises (`Label: value` lines plus prose with figures). Sign up in the UI at
+http://localhost:3000, then paste it in — or, from the command line, sign up first
+(every route below needs a logged-in inspector — see
+[Inspector accounts](#inspector-accounts)) and reuse the session cookie:
 
 ```bash
-curl -F "file=@data/samples/sample-inspection-report.md" http://localhost:8000/api/v1/documents/upload
+curl -c cookies.txt -X POST http://localhost:8000/api/v1/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "at-least-8-characters"}'
+
+curl -b cookies.txt -F "file=@data/samples/sample-inspection-report.md" \
+  http://localhost:8000/api/v1/documents/upload
 ```
 
-Then, using the returned document id:
+Then, using the returned document id (keep passing `-b cookies.txt`):
 
 - `POST /documents/{id}/extract` runs the offline, rule-based extractor and lets you
   ask questions like *"what did the inspector say about the HVAC?"*
@@ -167,20 +177,39 @@ All routes are mounted under `/api/v1`.
 | -------- | ------------------------------- | ---------------------------------------------- |
 | `GET`    | `/health`                       | Liveness check                                 |
 | `GET`    | `/health/db`                    | Database connectivity and pgvector status      |
+| `POST`   | `/auth/signup`                  | Create an inspector account, sets the session cookie |
+| `POST`   | `/auth/login`                   | Sets the session cookie                        |
+| `POST`   | `/auth/logout`                  | Clears the session cookie                      |
+| `GET`    | `/auth/me`                      | The logged-in inspector                        |
+| `GET`    | `/auth/google/login`            | Redirects to Google; sets the session cookie on return (see [Sign in with Google](#sign-in-with-google)) |
+| `GET`    | `/auth/google/callback`         | Google's redirect target — not called directly |
 | `POST`   | `/documents`                    | Ingest a document from a JSON body             |
 | `POST`   | `/documents/upload`             | Ingest an uploaded file — PDFs are OCR'd first |
-| `GET`    | `/documents`                    | List documents                                 |
+| `GET`    | `/documents`                    | List **your own** documents                    |
 | `GET`    | `/documents/{id}`               | Document detail, including its chunks          |
 | `DELETE` | `/documents/{id}`               | Delete a document and everything derived from it |
+| `DELETE` | `/documents/{id}/notify-email`  | Unsubscribe — clears `notify_email` (see [Weekly roadmap reminders](#weekly-roadmap-reminders)) |
 | `POST`   | `/documents/{id}/extract`       | Extract and embed facts for a document         |
-| `GET`    | `/facts`                        | List extracted facts                           |
+| `GET`    | `/facts`                        | A document's extracted facts (`document_id` required) |
 | `POST`   | `/documents/{id}/home-report`   | Generate the AI Home Health Report via Claude  |
 | `GET`    | `/documents/{id}/home-report`   | The most recently generated home report, if any |
-| `POST`   | `/ask`                          | Vector-search facts and compose an answer      |
-| `GET`    | `/insights`                     | List past questions and their answers          |
+| `POST`   | `/documents/{id}/action-plan`   | Generate a prioritized action plan via Claude  |
+| `GET`    | `/documents/{id}/action-plan`   | The most recently generated action plan, if any |
+| `POST`   | `/ask`                          | Vector-search **your own** facts and compose an answer |
+| `GET`    | `/insights`                     | List **your own** past questions and their answers |
 | `POST`   | `/reports`                      | Generate a Markdown report for a document      |
-| `GET`    | `/reports`                      | List reports                                   |
+| `GET`    | `/reports`                      | List **your own** reports                      |
 | `GET`    | `/reports/{id}`                 | Report detail, including rendered Markdown     |
+
+`POST /documents/upload` also accepts an optional `notify_email` form field, which
+opts that document into the weekly roadmap reminder job — see
+[Weekly roadmap reminders](#weekly-roadmap-reminders).
+
+Every route above except `/health*`, `/auth/signup`, `/auth/login`, and the
+unsubscribe route requires a logged-in inspector (see
+[Inspector accounts](#inspector-accounts)) and only ever operates on that
+inspector's own data — a document, report, or insight belonging to someone
+else returns `404`, the same response as one that doesn't exist at all.
 
 ## Configuration
 
@@ -211,6 +240,17 @@ gitignored.
 | `DOCAI_PROCESSOR_ID`   | —                                                    | Use a **Form Parser** processor — see [PDFs](#pdfs) |
 | `DOCAI_GCS_BUCKET`     | —                                                    | Only needed for PDFs over Document AI's online limits — see [PDFs](#pdfs) |
 | `ANTHROPIC_API_KEY`    | —                                                    | Needed by `POST /documents/{id}/home-report` and `.../action-plan` |
+| `RESEND_API_KEY`       | —                                                    | Needed by `scripts/send_roadmap_reminders.py` — see [Weekly roadmap reminders](#weekly-roadmap-reminders) |
+| `RESEND_FROM_EMAIL`    | `onboarding@resend.dev`                              | Resend's sandbox sender; works with no domain verification |
+| `FRONTEND_BASE_URL`    | `http://localhost:3000`                              | Used to build the report link inside reminder emails |
+| `JWT_SECRET`           | a working local placeholder                          | **Change this in any real deployment** — see [Inspector accounts](#inspector-accounts) |
+| `JWT_EXPIRES_DAYS`     | `14`                                                 | Session length                                 |
+| `AUTH_COOKIE_NAME`     | `alyf_session`                                       | Also hardcoded in `frontend/src/proxy.ts` — keep the two in sync if you change it |
+| `COOKIE_SECURE`        | `false`                                              | Set `true` once served over `https://`         |
+| `SESSION_SECRET`       | a working local placeholder                          | Backs Starlette's `SessionMiddleware` — separate from `JWT_SECRET`, see [Sign in with Google](#sign-in-with-google) |
+| `BACKEND_BASE_URL`     | `http://localhost:8000`                              | Used to build the Google OAuth callback URL    |
+| `GOOGLE_CLIENT_ID`     | —                                                    | From Google Cloud Console — see [Sign in with Google](#sign-in-with-google) |
+| `GOOGLE_CLIENT_SECRET` | —                                                    | From Google Cloud Console                      |
 
 Document AI also needs `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service account
 key file. That one is read from the real environment by the Google auth library, not
@@ -228,11 +268,185 @@ Chunking is tunable in `backend/app/core/config.py` — `chunk_size_words` (180)
 | --------------------- | ----------------------- | -------------------------------------------------------- |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | `NEXT_PUBLIC_` values ship in the browser bundle — no secrets |
 
+## Inspector accounts
+
+Every home inspector has their own account (email + password) and only ever sees
+their own documents, reports, and homes — the whole product's premise is that a
+report belongs to the inspector who ran it, so this isn't optional multi-tenancy
+bolted on later.
+
+**How it works:** `POST /auth/signup` / `POST /auth/login` hash the password with
+`bcrypt` and set a `PyJWT`-signed session in an httpOnly cookie
+(`app/auth/service.py`). `GET /auth/me` and every document-scoped route read that
+cookie via `CurrentInspectorDep` (`app/api/deps.py`) — missing, tampered, or expired
+all fail the same way, a `401`. Most document-scoped routes go through
+`OwnedDocumentDep`, which does the existence-and-ownership check in one place and
+returns `404` (not `403`) on a mismatch, so a request can never distinguish "this
+document doesn't exist" from "it exists but isn't yours."
+
+**`Home` is scoped too, not just `Document`.** Two different inspectors reporting on
+the same physical address would otherwise resolve to the same `Home` row (matched
+purely by normalized address — see `_resolve_home` in `extraction/service.py`) and
+each would see the other's findings through that collision. `Home.inspector_id` is
+part of the match specifically to prevent that.
+
+**Frontend:** `/login` and `/signup` are the only pages reachable without a session;
+`/` (the dev harness) and `/upload` both check `GET /auth/me` on load and redirect
+to `/login` on `401`, backed up by `frontend/src/proxy.ts`, which redirects on the
+session cookie's absence before the page even loads — a UX shortcut, not the real
+security boundary, since it only checks the cookie is *present*, not that it's
+valid. **`/reports/*` is deliberately excluded from all of this** — homeowners don't
+have inspector accounts, so the report, timeline, and unsubscribe pages stay exactly
+as unauthenticated, link-based access as before.
+
+Explicit non-goals for now: no email verification, no forgot-password flow, no
+rate-limiting or lockout on failed logins, no roles or admin view. CSRF is handled by
+`SameSite=Lax` on the session cookie (blocks it on cross-site `POST`/`DELETE`, the
+actual attack surface) rather than a separate CSRF token.
+
+Existing rows from before accounts existed have `inspector_id IS NULL` — not deleted,
+not reassigned, just invisible to every inspector-scoped list/lookup from now on. As
+with `notify_email` before it, adding a column to an already-running local database
+needs a manual step, since there's no migration framework in this project:
+
+```sql
+ALTER TABLE documents ADD COLUMN inspector_id UUID REFERENCES inspectors(id) ON DELETE SET NULL;
+ALTER TABLE homes ADD COLUMN inspector_id UUID REFERENCES inspectors(id) ON DELETE SET NULL;
+ALTER TABLE insights ADD COLUMN inspector_id UUID REFERENCES inspectors(id) ON DELETE SET NULL;
+
+CREATE INDEX ix_documents_inspector_id ON documents(inspector_id);
+CREATE INDEX ix_homes_inspector_id ON homes(inspector_id);
+CREATE INDEX ix_insights_inspector_id ON insights(inspector_id);
+```
+
+Run this **after** the backend has started at least once with the new code (the
+`inspectors` table the `REFERENCES` above points at doesn't exist until then).
+
+`inspectors` itself is a brand-new table, created automatically on restart, same as
+`reminder_logs` before it.
+
+### Sign in with Google
+
+"Continue with Google" is an additional, equally-first-class way in — not a
+replacement for email + password, which stays exactly as it is. It uses
+[`authlib`](https://docs.authlib.org/) (`app/auth/oauth.py`), the standard
+OAuth/OIDC client for Starlette/FastAPI: Google publishes an OpenID Connect
+discovery document, so authlib fetches its public keys and verifies the signed
+`id_token` itself — there's no hand-rolled JWT verification in this codebase.
+
+**Setup:** register an OAuth 2.0 Client ID in the
+[Google Cloud Console](https://console.cloud.google.com/apis/credentials) (Web
+application type), add `{BACKEND_BASE_URL}/api/v1/auth/google/callback` (e.g.
+`http://localhost:8000/api/v1/auth/google/callback` locally) as an authorized
+redirect URI, and put the resulting client ID/secret in `backend/.env` as
+`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. Left blank, `GET
+/auth/google/login` returns a clear "Google sign-in isn't configured yet."
+`400` instead of redirecting to Google with an empty client ID.
+
+**Account linking** (`find_or_create_from_oauth` in `app/auth/service.py`):
+1. An existing `OAuthAccount` for this exact Google user ID → that inspector.
+2. Otherwise, **only if Google reports the email as verified**, an existing
+   password-based inspector with that email → link Google onto that same
+   account rather than creating a second one. This verified-email check is the
+   one real security-relevant piece of this feature — auto-linking on an
+   *unverified* email would let anyone who controls some Google-adjacent
+   identity claim an existing account.
+3. Otherwise, create a new inspector with `password_hash = NULL` — an
+   OAuth-only account has no password, and a password-login attempt against it
+   fails cleanly (`authenticate()` short-circuits on a `NULL` hash rather than
+   passing `None` into `bcrypt.checkpw`).
+
+`oauth_accounts` is a new table, created automatically like `inspectors` was.
+`inspectors.password_hash` needs an actual constraint change on an
+already-running local database, not just a new column:
+
+```sql
+ALTER TABLE inspectors ALTER COLUMN password_hash DROP NOT NULL;
+```
+
+**Frontend:** `/login` and `/signup` both show a "Continue with Google" button
+— a real `<a>` tag pointing at `GET /auth/google/login`, not `fetch`, since the
+flow needs a full browser navigation for Google's own login screen to appear.
+`GET /auth/google/callback` redirects back to `{FRONTEND_BASE_URL}/upload` on
+success (setting the same session cookie password login does) or to
+`{FRONTEND_BASE_URL}/login?error=...` on failure, which `/login` reads and
+shows in its existing error-banner.
+
+## Weekly roadmap reminders
+
+`scripts/send_roadmap_reminders.py` checks every document that opted in (via
+`notify_email` at upload time, see [API](#api)) for outstanding action-plan items in
+the `next_90_days` tier, and sends one short, plain-language email per document that
+has anything outstanding — never one per item, and never an "all clear" email when
+there's nothing to report.
+
+**Reminders ramp up, not flat weekly.** How often a document gets re-emailed depends
+on how close its soonest outstanding item is to its 90-day mark: roughly monthly
+while there's no real urgency, roughly weekly once inside the final 30 days
+(`app/notifications/service.py`'s `reminder_interval_days`) — including once an item
+is overdue, which is just a very negative days-until-due, still inside that same
+weekly branch. Run the script on any schedule you like (weekly is a safe default);
+it only actually sends when a document's own cadence says today is due, tracked in
+the `reminder_logs` table (one row per document, the timestamp of its last send).
+
+```bash
+cd backend
+python scripts/send_roadmap_reminders.py --dry-run   # prints each email instead of sending
+python scripts/send_roadmap_reminders.py              # sends for real — needs RESEND_API_KEY
+```
+
+Sign up at [resend.com](https://resend.com/signup) (free, no card required) and put
+an API key in `backend/.env` as `RESEND_API_KEY`. The default sender,
+`onboarding@resend.dev`, is Resend's own sandbox address and works immediately with
+no domain verification — switch `RESEND_FROM_EMAIL` once you've verified your own
+domain.
+
+**This is a script, not a scheduled job** — there is no scheduler running inside the
+app, and none is set up here, since there's nowhere for one to run yet (the only
+deployment target today is `docker compose` for local Postgres). Once the backend is
+actually deployed somewhere, point that platform's cron / scheduled-task feature (or
+plain `cron`, or Windows Task Scheduler for a machine that's always on) at the command
+above — anywhere from daily to weekly is fine, since the cadence logic above decides
+per document whether today is actually a send day.
+
+Every reminder email ends with an unsubscribe link
+(`DELETE /documents/{id}/notify-email`, fronted by `/reports/{id}/unsubscribe` in the
+frontend) that clears `notify_email` for that document — the release valve for an
+item that stays overdue indefinitely, since there's no "mark resolved" concept (see
+below) to know when it's safe to stop on its own. No login is needed to use it: same
+trust model as the report link itself (an unguessable id, no auth system exists yet).
+
+Two things worth knowing before relying on this:
+
+- **`created_at`, not an inspection date, anchors the 90-day window.** `InspectionEvent.inspection_date` exists in the schema but is never populated by the pipeline
+  today (see `app/extraction/models.py`), so "due" is measured from when the action
+  plan was generated, not from the actual inspection.
+- **There's no way to mark an item resolved**, only a way to stop hearing about all of
+  them at once via unsubscribe. A homeowner who fixes one thing but wants to keep
+  hearing about the rest has no in-between option today; a real "mark as done" flow
+  is a separate feature.
+
+If `backend/.env` didn't exist yet when `notify_email` was added to the `documents`
+table, a database that was already running needs one manual schema update — there's
+no migration framework in this project (see `init_db()` in
+`app/core/database.py`):
+
+```sql
+ALTER TABLE documents ADD COLUMN notify_email VARCHAR(320);
+```
+
+(Or, for a local dev database with nothing worth keeping, `docker compose down -v`
+and `docker compose up -d` to rebuild it from scratch instead.) The new
+`reminder_logs` table needs no such step — it's a table `create_all` has never seen
+before, so a normal backend restart creates it.
+
 ## Tests
 
-Thirty-one unit tests cover chunking (4), the rule-based extractor (5), dedupe (6),
-answer composition (4), embedding (3), and PDF/table handling (9). They exercise pure
-functions only, so no database or running server is needed:
+Fifty-five unit tests cover chunking, the rule-based extractor, dedupe, answer
+composition, embedding, PDF/table handling, and (`test_notifications.py`) the weekly
+roadmap reminder logic — the escalating reminder cadence, the safety-hazard keyword
+check, and the email wording. They exercise pure functions only, so no database or
+running server is needed:
 
 ```bash
 cd backend
@@ -285,22 +499,30 @@ retrieval untouched.
 ```
 backend/
   app/
-    api/            route definitions, aggregated in router.py
+    api/            route definitions + auth/ownership deps, aggregated in router.py
     core/           config, database engine, embeddings
+    auth/           inspector accounts  models / schemas / service / oauth.py (Google)
     ingestion/      chunking            models / schemas / service
     extraction/     facts + embeddings  models / schemas / service
     reasoning/      vector search       models / schemas / service
     reports/        Markdown assembly   models / schemas / service
+    notifications/  roadmap reminders   emailer / models (reminder_logs only) / service
     main.py         app factory, CORS, startup schema creation
+  scripts/          one-off / periodic scripts run outside the API process
   tests/
 frontend/
   src/app/          Next.js App Router pages
+  src/proxy.ts      redirects to /login if the session cookie is absent
   src/lib/api.ts    typed client for the backend
 data/samples/       example input documents
 db/init/            SQL run on first container start (extensions)
 docker-compose.yml  database + Adminer
 ```
 
-Every module follows the same four-file shape — `models.py` (tables),
+Every data-owning module follows the same four-file shape — `models.py` (tables),
 `schemas.py` (Pydantic in/out), `service.py` (logic), `__init__.py` — so a new stage
-slots in predictably.
+slots in predictably. `notifications` is a partial exception: besides its own
+`reminder_logs` table (cadence bookkeeping, see [Weekly roadmap reminders](#weekly-roadmap-reminders)),
+it also reads across `ingestion` and `extraction` through their service functions,
+the same role `reports` plays for the request/response pipeline — and has no
+`schemas.py`, since nothing it owns is ever returned from an API route.

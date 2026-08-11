@@ -5,10 +5,13 @@ import logging
 import uuid
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from pydantic import EmailStr, TypeAdapter, ValidationError
 
-from app.api.deps import SessionDep
+from app.api.deps import CurrentInspectorDep, OwnedDocumentDep, SessionDep
 from app.ingestion import service
 from app.ingestion.schemas import DocumentCreate, DocumentDetail, DocumentRead
+
+_email_adapter = TypeAdapter(EmailStr)
 
 logger = logging.getLogger(__name__)
 
@@ -16,19 +19,36 @@ router = APIRouter(prefix="/documents", tags=["ingestion"])
 
 
 @router.post("", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
-async def create_document(payload: DocumentCreate, session: SessionDep) -> DocumentRead:
-    """Ingest a document from raw text."""
-    document = await service.ingest_document(session, payload)
+async def create_document(
+    payload: DocumentCreate, current: CurrentInspectorDep, session: SessionDep
+) -> DocumentRead:
+    """Ingest a document from raw text, owned by the logged-in inspector."""
+    document = await service.ingest_document(session, payload, inspector_id=current.id)
     return DocumentRead.model_validate(document)
 
 
 @router.post("/upload", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
 async def upload_document(
+    current: CurrentInspectorDep,
     session: SessionDep,
     file: UploadFile = File(..., description="A PDF, or a UTF-8 text file (.txt, .md, .csv)"),
     title: str | None = Form(default=None),
+    notify_email: str | None = Form(
+        default=None, description="Optional -- opts this report into weekly roadmap reminders."
+    ),
 ) -> DocumentRead:
-    """Ingest a file upload. PDFs are sent to Document AI for OCR first."""
+    """Ingest a file upload, owned by the logged-in inspector. PDFs are sent
+    to Document AI for OCR first.
+    """
+    if notify_email:
+        try:
+            notify_email = _email_adapter.validate_python(notify_email)
+        except ValidationError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="notify_email is not a valid email address.",
+            ) from None
+
     raw = await file.read()
 
     try:
@@ -69,29 +89,44 @@ async def upload_document(
             source_ref=file.filename,
             file_bytes=raw,
             file_sha256=hashlib.sha256(raw).hexdigest(),
+            notify_email=notify_email,
         ),
+        inspector_id=current.id,
     )
     return DocumentRead.model_validate(document)
 
 
 @router.get("", response_model=list[DocumentRead])
 async def list_documents(
+    current: CurrentInspectorDep,
     session: SessionDep,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[DocumentRead]:
-    documents = await service.list_documents(session, limit=limit)
+    """The logged-in inspector's own documents -- never anyone else's."""
+    documents = await service.list_documents(session, inspector_id=current.id, limit=limit)
     return [DocumentRead.model_validate(document) for document in documents]
 
 
 @router.get("/{document_id}", response_model=DocumentDetail)
-async def get_document(document_id: uuid.UUID, session: SessionDep) -> DocumentDetail:
-    document = await service.get_document_with_chunks(session, document_id)
-    if document is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+async def get_document(document: OwnedDocumentDep, session: SessionDep) -> DocumentDetail:
+    # OwnedDocumentDep's lookup doesn't load chunks -- DocumentDetail needs
+    # them, so they're fetched only once ownership is already confirmed.
+    await session.refresh(document, attribute_names=["chunks"])
     return DocumentDetail.model_validate(document)
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_document(document_id: uuid.UUID, session: SessionDep) -> None:
-    if not await service.delete_document(session, document_id):
+async def delete_document(document: OwnedDocumentDep, session: SessionDep) -> None:
+    await service.delete_document(session, document.id)
+
+
+@router.delete("/{document_id}/notify-email", status_code=status.HTTP_204_NO_CONTENT)
+async def unsubscribe(document_id: uuid.UUID, session: SessionDep) -> None:
+    """The unsubscribe link every weekly roadmap reminder email includes --
+    see app/notifications/service.py. Deliberately excluded from
+    CurrentInspectorDep/OwnedDocumentDep: this is clicked by a homeowner
+    from an email, and homeowners don't have inspector accounts. Same trust
+    model as the report link itself -- an unguessable id, no login.
+    """
+    if not await service.clear_notify_email(session, document_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")

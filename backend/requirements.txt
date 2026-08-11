@@ -6,6 +6,9 @@ pgvector==0.4.2
 pydantic==2.12.4
 pydantic-settings==2.13.0
 python-multipart==0.0.20
+# email-validator backs pydantic's EmailStr, used to validate notify_email on
+# upload (app/api/routes/ingestion.py) and in app/notifications.
+email-validator==2.3.0
 
 # Development / testing
 # anthropic is used by app/extraction/home_inspection.py (structured, LLM-based
@@ -25,3 +28,14 @@ pypdf==6.15.0
 pytest==8.4.2
 pytest-asyncio==1.3.0
 httpx==0.28.1
+# resend sends the weekly roadmap reminder emails -- app/notifications/emailer.py.
+resend==2.35.0
+# bcrypt hashes inspector passwords, pyjwt issues/verifies session tokens --
+# app/auth/service.py.
+bcrypt==5.0.0
+pyjwt==2.13.0
+# authlib is the OAuth/OIDC client for Sign in with Google (app/auth/oauth.py).
+# itsdangerous backs Starlette's SessionMiddleware, which authlib needs for the
+# transient state/nonce during the redirect round-trip (app/main.py).
+authlib==1.7.2
+itsdangerous==2.2.0

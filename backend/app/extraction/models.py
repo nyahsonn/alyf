@@ -53,13 +53,22 @@ class Fact(Base):
 
 
 class Home(Base):
-    """A physical property, matched across inspection events by address.
+    """A physical property, matched across inspection events by address --
+    scoped per inspector, not globally.
 
-    Address matching (see `_normalize_address` in extraction/service.py) is a
+    Address matching (see `_resolve_home` in extraction/service.py) is a
     normalized-string exact match, not a real address normalizer -- "123 Main
     St" and "123 Main Street" will not be recognized as the same home. Good
     enough while the only address source is a single LLM reading of a
     report's cover page; revisit if that under-matches in practice.
+
+    `inspector_id` is part of the match on purpose: without it, two different
+    inspectors who happen to report on the same address would silently share
+    one Home row, and each would see the other's findings through that
+    collision -- exactly what per-inspector data isolation (app/auth) is
+    supposed to prevent. Nullable for the same reason Document.inspector_id
+    is: homes created before accounts existed stay valid, just invisible to
+    every inspector-scoped lookup from now on.
 
     Unlike every other table here, a home has no direct `document_id`: it is
     meant to outlive any single document once a property has more than one
@@ -75,6 +84,12 @@ class Home(Base):
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     normalized_address: Mapped[str | None] = mapped_column(
         String(500), nullable=True, index=True
+    )
+    inspector_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("inspectors.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

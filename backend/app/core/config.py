@@ -52,6 +52,42 @@ class Settings(BaseSettings):
     # with a message that says so rather than the pipeline refusing to start.
     docai_gcs_bucket: str = ""
 
+    # Resend (resend.com), used by app/notifications/emailer.py to send weekly
+    # roadmap reminders (scripts/send_roadmap_reminders.py). The default
+    # sender is Resend's own sandbox address -- works immediately with no
+    # domain verification, fine until a custom domain is set up.
+    resend_api_key: str = ""
+    resend_from_email: str = "onboarding@resend.dev"
+
+    # Base URL used to build links back into the report in reminder emails
+    # (app/notifications/service.py). Not read from the browser, so this is
+    # the deployed frontend's real URL in production, not NEXT_PUBLIC_API_URL.
+    frontend_base_url: str = "http://localhost:3000"
+
+    # Inspector accounts (app/auth). jwt_secret gets the same treatment as
+    # POSTGRES_PASSWORD's default elsewhere in this repo: a working local
+    # value with no setup required, which MUST be overridden by a real
+    # secret in any deployment that isn't a laptop -- anyone who has it can
+    # mint a session for any inspector id. cookie_secure stays False for
+    # local http:// dev; set True once served over https.
+    jwt_secret: str = "dev-secret-change-me-in-any-real-deployment-32bytes"
+    jwt_expires_days: int = 14
+    auth_cookie_name: str = "alyf_session"
+    cookie_secure: bool = False
+
+    # Sign in with Google (app/auth/oauth.py). Left blank,
+    # provider_configured() returns False and /auth/google/login responds
+    # with a clear "not configured" error instead of redirecting to Google
+    # with an empty client id. session_secret backs Starlette's
+    # SessionMiddleware, used only for the transient state/nonce during the
+    # OAuth redirect round-trip -- deliberately separate from jwt_secret,
+    # which signs long-lived session cookies.
+    session_secret: str = "dev-session-secret-change-me-in-any-real-deployment"
+    backend_base_url: str = "http://localhost:8000"
+
+    google_client_id: str = ""
+    google_client_secret: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

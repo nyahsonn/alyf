@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 
@@ -14,11 +14,20 @@ const STAGE_COPY: Record<Exclude<Stage, "idle" | "error">, { label: string; prog
 
 export default function UploadPage() {
   const router = useRouter();
+  const [checkingAuth, setCheckingAuth] = useState(true);
   const [stage, setStage] = useState<Stage>("idle");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [notifyEmail, setNotifyEmail] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    api
+      .me()
+      .then(() => setCheckingAuth(false))
+      .catch(() => router.replace("/login"));
+  }, [router]);
 
   const busy = stage !== "idle" && stage !== "error";
 
@@ -34,7 +43,7 @@ export default function UploadPage() {
       try {
         setStage("uploading");
         setProgress(STAGE_COPY.uploading.progress);
-        const document = await api.uploadDocument(file);
+        const document = await api.uploadDocument(file, notifyEmail.trim() || undefined);
 
         setStage("home-report");
         setProgress(STAGE_COPY["home-report"].progress);
@@ -54,7 +63,7 @@ export default function UploadPage() {
         setStage("error");
       }
     },
-    [router],
+    [router, notifyEmail],
   );
 
   const reset = () => {
@@ -65,9 +74,25 @@ export default function UploadPage() {
 
   const stageCopy = stage !== "idle" && stage !== "error" ? STAGE_COPY[stage] : null;
 
+  if (checkingAuth) {
+    return (
+      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-14">
+        <p className="text-sm text-ink-soft">One moment…</p>
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 py-14">
-      <header className="mb-10 text-center">
+      <button
+        type="button"
+        onClick={() => api.logout().finally(() => router.push("/login"))}
+        className="self-end text-xs font-medium text-ink-faint underline underline-offset-2 hover:text-ink"
+      >
+        Log out
+      </button>
+
+      <header className="mt-4 mb-10 text-center">
         <h1 className="font-display text-4xl font-medium tracking-tight italic">ALYF</h1>
         <p className="mt-2 text-sm text-ink-soft">
           Upload an inspection PDF to get your AI Home Health Report.
@@ -89,6 +114,20 @@ export default function UploadPage() {
           </button>
         </div>
       )}
+
+      <label className="mb-4 block text-left">
+        <span className="text-xs font-medium text-ink-soft">
+          Homeowner&apos;s email for weekly reminders (optional)
+        </span>
+        <input
+          type="email"
+          value={notifyEmail}
+          onChange={(event) => setNotifyEmail(event.target.value)}
+          disabled={busy}
+          placeholder="homeowner@example.com"
+          className="mt-1.5 w-full rounded-xl border border-line bg-surface px-3.5 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none disabled:opacity-50"
+        />
+      </label>
 
       <div
         onDragOver={(event) => {

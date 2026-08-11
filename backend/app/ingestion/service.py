@@ -174,8 +174,16 @@ async def text_from_upload(raw: bytes) -> tuple[str, str]:
     return "\n\n".join(section for section in sections if section), "pdf"
 
 
-async def ingest_document(session: AsyncSession, payload: DocumentCreate) -> Document:
-    """Persist a document plus its chunks in a single transaction."""
+async def ingest_document(
+    session: AsyncSession, payload: DocumentCreate, inspector_id: uuid.UUID | None = None
+) -> Document:
+    """Persist a document plus its chunks in a single transaction.
+
+    `inspector_id` is a separate parameter, not a `DocumentCreate` field --
+    it comes from the authenticated session (see api/deps.py's
+    CurrentInspectorDep), never from request-body input, so there's no way
+    for a request to claim ownership on someone else's behalf.
+    """
     document = Document(
         title=payload.title.strip(),
         content=payload.content,
@@ -183,6 +191,8 @@ async def ingest_document(session: AsyncSession, payload: DocumentCreate) -> Doc
         source_ref=payload.source_ref,
         file_bytes=payload.file_bytes,
         file_sha256=payload.file_sha256,
+        notify_email=payload.notify_email,
+        inspector_id=inspector_id,
         status="ingested",
     )
     session.add(document)
@@ -202,15 +212,49 @@ async def ingest_document(session: AsyncSession, payload: DocumentCreate) -> Doc
     return document
 
 
-async def list_documents(session: AsyncSession, limit: int = 50) -> list[Document]:
+async def list_documents(
+    session: AsyncSession, inspector_id: uuid.UUID, limit: int = 50
+) -> list[Document]:
+    """A single inspector's own documents -- never a global list. Callers
+    always have an authenticated inspector in hand (see api/deps.py's
+    CurrentInspectorDep) by the time they can reach this.
+    """
     result = await session.execute(
-        select(Document).order_by(Document.created_at.desc()).limit(limit)
+        select(Document)
+        .where(Document.inspector_id == inspector_id)
+        .order_by(Document.created_at.desc())
+        .limit(limit)
     )
     return list(result.scalars())
 
 
 async def get_document(session: AsyncSession, document_id: uuid.UUID) -> Document | None:
     return await session.get(Document, document_id)
+
+
+async def list_documents_with_notify_email(session: AsyncSession) -> list[Document]:
+    """Every document that opted into weekly roadmap reminders at upload time.
+
+    Used by app/notifications/service.py -- kept here rather than a raw query
+    in that module, since ingestion owns the `documents` table (see README,
+    "modules talk to their neighbours only through service calls").
+    """
+    result = await session.execute(select(Document).where(Document.notify_email.is_not(None)))
+    return list(result.scalars())
+
+
+async def clear_notify_email(session: AsyncSession, document_id: uuid.UUID) -> bool:
+    """Opt a document out of weekly roadmap reminders -- the unsubscribe
+    link every reminder email includes (see app/notifications/service.py's
+    build_reminder_email). Returns False if the document doesn't exist;
+    idempotent otherwise, so clicking the link twice is harmless.
+    """
+    document = await session.get(Document, document_id)
+    if document is None:
+        return False
+    document.notify_email = None
+    await session.commit()
+    return True
 
 
 async def get_document_with_chunks(

@@ -38,6 +38,20 @@ class Document(Base):
     # any downstream row trace back to the actual source PDF.
     file_bytes: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     file_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Optional -- set at upload time if the uploader wants weekly roadmap
+    # reminders (see app/notifications). Null means "don't email this one".
+    notify_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    # Owning inspector (see app/auth). Nullable so documents created before
+    # accounts existed stay valid rows -- just invisible to every
+    # inspector-scoped list/lookup from now on, rather than deleted or
+    # reassigned. SET NULL rather than CASCADE: deleting an inspector's
+    # account should not silently wipe a client's reports.
+    inspector_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("inspectors.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
