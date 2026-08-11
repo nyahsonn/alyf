@@ -2,6 +2,7 @@
 
 import logging
 
+import sentry_sdk
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import OwnedDocumentDep, SessionDep
@@ -82,6 +83,10 @@ async def create_home_report(document: OwnedDocumentDep, session: SessionDep) ->
         # The underlying message can include Claude's own error text, which is
         # meant for a developer reading logs rather than an API caller.
         logger.error("Home report extraction failed for document %s: %s", document.id, e)
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("document_id", str(document.id))
+            scope.set_tag("stage", "home_report")
+            sentry_sdk.capture_exception(e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not generate the home report. See the server log for details.",
@@ -120,6 +125,10 @@ async def create_action_plan(document: OwnedDocumentDep, session: SessionDep) ->
         items = await service.create_action_plan(session, document.id)
     except ExtractionError as e:
         logger.error("Action plan generation failed for document %s: %s", document.id, e)
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("document_id", str(document.id))
+            scope.set_tag("stage", "action_plan")
+            sentry_sdk.capture_exception(e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not generate the action plan. See the server log for details.",

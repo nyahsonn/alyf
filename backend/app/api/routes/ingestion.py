@@ -4,6 +4,7 @@ import hashlib
 import logging
 import uuid
 
+import sentry_sdk
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import EmailStr, TypeAdapter, ValidationError
 
@@ -65,6 +66,10 @@ async def upload_document(
         # The underlying message can name the project and processor, so it is
         # logged rather than returned to whoever posted the file.
         logger.error("OCR failed for upload %r: %s", file.filename, e)
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("stage", "ocr")
+            scope.set_context("upload", {"filename": file.filename})
+            sentry_sdk.capture_exception(e)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Could not extract text from the PDF. See the server log for details.",

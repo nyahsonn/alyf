@@ -8,6 +8,7 @@ import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -21,6 +22,15 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s %(name)s  %(message)s",
 )
 logger = logging.getLogger("alyf")
+
+if settings.sentry_dsn:
+    # No traces_sample_rate -- this is error monitoring, not performance
+    # tracing, so nothing is sampled/dropped: every exception reported via
+    # sentry_sdk.capture_exception (see extraction.py, ingestion.py) is
+    # sent. FastAPI/Starlette integrations are auto-enabled by sentry_sdk
+    # whenever it detects those packages installed, so unhandled exceptions
+    # anywhere in a request are also captured with no extra code here.
+    sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.environment)
 
 
 @asynccontextmanager

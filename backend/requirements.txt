@@ -39,3 +39,6 @@ pyjwt==2.13.0
 # transient state/nonce during the redirect round-trip (app/main.py).
 authlib==1.7.2
 itsdangerous==2.2.0
+# sentry-sdk reports OCR/extraction/report-generation failures to Sentry so
+# they page someone instead of sitting in a server log -- app/main.py.
+sentry-sdk==2.67.1

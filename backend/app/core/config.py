@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
 
+    # Error monitoring (https://sentry.io). Left blank, sentry_sdk is never
+    # initialized -- the app runs exactly as it does today, just without
+    # alerting. See app/main.py and README, "Error monitoring".
+    sentry_dsn: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

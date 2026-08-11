@@ -251,6 +251,7 @@ gitignored.
 | `BACKEND_BASE_URL`     | `http://localhost:8000`                              | Used to build the Google OAuth callback URL    |
 | `GOOGLE_CLIENT_ID`     | —                                                    | From Google Cloud Console — see [Sign in with Google](#sign-in-with-google) |
 | `GOOGLE_CLIENT_SECRET` | —                                                    | From Google Cloud Console                      |
+| `SENTRY_DSN`           | —                                                    | From a Sentry project — see [Error monitoring](#error-monitoring) |
 
 Document AI also needs `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service account
 key file. That one is read from the real environment by the Google auth library, not
@@ -371,6 +372,46 @@ flow needs a full browser navigation for Google's own login screen to appear.
 success (setting the same session cookie password login does) or to
 `{FRONTEND_BASE_URL}/login?error=...` on failure, which `/login` reads and
 shows in its existing error-banner.
+
+## Error monitoring
+
+Three request paths call out to something that can fail for reasons entirely
+outside ALYF's control: Document AI (OCR on upload), and Claude (home-report
+and action-plan generation). All three already catch that failure and turn it
+into a clean `502` for the caller (`app/api/routes/ingestion.py`,
+`app/api/routes/extraction.py`) — but until now, the only record of *why* was
+a `logger.error` line in a server log nobody is watching in real time. This
+wires those same three catch blocks to [Sentry](https://sentry.io) as well, so
+a real failure pages someone instead of surfacing "days later."
+
+**Setup** (you'll need to do this part — creating the account is not something
+this assistant can do on your behalf):
+1. Sign up at [sentry.io](https://sentry.io) (free tier is enough for this) and
+   create a Python/FastAPI project.
+2. Copy its DSN into `backend/.env` as `SENTRY_DSN`. Left blank,
+   `sentry_sdk.init` is never called (see `app/main.py`) — the app behaves
+   exactly as it does today, just without alerting.
+3. **Email alerts work with no further setup** — every new Sentry project ships
+   with a default alert rule that emails project members on a new issue.
+4. **Slack alerts** need one extra one-time step in the Sentry dashboard, not
+   in this codebase: *Settings → Integrations → Slack* to connect your
+   workspace, then add a "Send a Slack notification" action to the project's
+   alert rule (*Alerts → your rule → Actions*). Sentry's own docs walk through
+   this; it's an OAuth authorization against your Slack workspace, so it has to
+   be you clicking through it, not code shipped here.
+
+**How it's wired:** `app/main.py` calls `sentry_sdk.init(dsn=..., environment=...)`
+once at startup if `SENTRY_DSN` is set — no `traces_sample_rate`, since this is
+error monitoring, not performance tracing, so every captured exception is sent,
+none sampled away. FastAPI/Starlette are auto-instrumented by `sentry_sdk`
+whenever it detects those packages, so genuinely unhandled exceptions anywhere
+in a request are already captured without further code. The three sites above
+are different: they *handle* their exception (to return a clean `502` instead
+of a raw 500), which is exactly what stops Sentry's automatic capture from ever
+seeing them — each one now also calls `sentry_sdk.capture_exception(e)` inside
+a scope tagged with `document_id` (or the upload's filename, before a document
+exists yet) and which stage failed, so the alert says *which report* broke, not
+just that something did.
 
 ## Weekly roadmap reminders
 
