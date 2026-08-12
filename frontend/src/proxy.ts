@@ -1,27 +1,22 @@
 import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
 
-// UX convenience only, not the security boundary -- the API's own 401s are
-// (see backend/app/api/deps.py's CurrentInspectorDep). This just checks the
-// session cookie's *presence*, not its signature/expiry, since verifying a
-// JWT here would mean duplicating jwt_secret into the frontend process.
-// An inspector-facing route with a stale/expired cookie still redirects
-// correctly -- just one round trip later, once the page's own api.me() call
-// gets a 401 back.
-const SESSION_COOKIE = "alyf_session";
-
-export function proxy(request: NextRequest) {
-  if (request.cookies.get(SESSION_COOKIE)) {
-    return NextResponse.next();
-  }
-  const loginUrl = new URL("/login", request.url);
-  return NextResponse.redirect(loginUrl);
+// Previously did a UX-shortcut redirect here by checking for the
+// alyf_session cookie's presence on the incoming request (never its
+// signature/expiry -- verifying a JWT here would mean duplicating
+// jwt_secret into the frontend process). That only ever worked by
+// accident: in local dev, the frontend (localhost:3000) and backend
+// (localhost:8000) share the hostname "localhost", and cookies are scoped
+// by hostname only, not port, so the backend-set cookie was visible here
+// too. In any real deployment the frontend and backend sit on genuinely
+// different domains (e.g. vercel.app / up.railway.app) -- the cookie is
+// only ever sent to the backend, this middleware never sees it, and every
+// visit to an inspector-facing route redirected to /login regardless of
+// actual login state, Google sign-in included.
+//
+// The real check already lives where it has to: each inspector-facing
+// page calls GET /auth/me itself (a real credentialed cross-origin fetch)
+// and redirects to /login on a 401 -- see frontend/src/app/upload/page.tsx
+// and frontend/src/app/dev/page.tsx.
+export function proxy() {
+  return NextResponse.next();
 }
-
-export const config = {
-  // Inspector-facing pages only -- /reports/* stays unauthenticated
-  // (homeowner-facing, no login), same for /login, /signup, and the public
-  // landing page at "/" itself. /dev is the old generic-pipeline test
-  // harness, still gated the same way "/" used to be.
-  matcher: ["/dev", "/upload"],
-};
