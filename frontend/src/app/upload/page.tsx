@@ -47,6 +47,17 @@ export default function UploadPage() {
   }, [router]);
 
   const busy = stage !== "idle" && stage !== "error";
+  const [showReassurance, setShowReassurance] = useState(false);
+
+  // A stage that takes a while (usually the AI parsing step) leaves the
+  // label and progress bar sitting still -- without this, that reads as
+  // "stuck" rather than "working." Resets on every stage change.
+  useEffect(() => {
+    setShowReassurance(false);
+    if (!busy) return;
+    const timer = setTimeout(() => setShowReassurance(true), 7000);
+    return () => clearTimeout(timer);
+  }, [stage, busy]);
 
   const processFile = useCallback(
     async (file: File) => {
@@ -236,12 +247,20 @@ export default function UploadPage() {
               </>
             ) : (
               <div className="w-full max-w-sm">
-                <p className="text-sm font-medium text-ink">{stageCopy?.label}</p>
-                <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-surface-sunk">
+                <p className="text-sm font-medium text-ink animate-pulse">{stageCopy?.label}</p>
+                <p
+                  className={`mt-2 text-xs text-ink-faint transition-opacity duration-500 ${
+                    showReassurance ? "opacity-100" : "opacity-0"
+                  }`}
+                >
+                  Still working — larger reports can take a minute or two. Hang tight.
+                </p>
+                <div className="relative mt-4 h-1.5 w-full overflow-hidden rounded-full bg-surface-sunk">
                   <div
                     className="h-full rounded-full bg-accent transition-all duration-500"
                     style={{ width: `${progress}%` }}
                   />
+                  <div className="progress-shimmer absolute inset-0 bg-gradient-to-r from-transparent via-white/50 to-transparent" />
                 </div>
               </div>
             )}

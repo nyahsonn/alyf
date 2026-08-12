@@ -78,3 +78,19 @@ body {
   color: var(--ink);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
+
+/* Continuous sweep over the upload/processing progress bar -- runs the
+ * whole time a stage is active, independent of `progress`'s width jumps,
+ * so the bar still visibly moves even when a stage takes a while. */
+@keyframes progress-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.progress-shimmer {
+  animation: progress-shimmer 1.6s ease-in-out infinite;
+}
