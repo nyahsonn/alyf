@@ -27,16 +27,17 @@ import {
   isSafetyHazard,
   reportDisclaimer,
 } from "@/lib/format";
-import { LogoSymbol } from "@/components/Logo";
+import { Logo } from "@/components/Logo";
 
 // Small, unobtrusive brand mark in the corner -- present on every state of
 // this page (loading/error/pending/ready), not just the full report, since
 // it's cheap to place once via absolute positioning rather than threading
-// it through each state's own layout.
+// it through each state's own layout. Full icon+wordmark lockup, same as
+// every other page, just sized down for a corner.
 function CornerMark() {
   return (
     <div className="absolute top-6 right-6 sm:top-8 sm:right-8">
-      <LogoSymbol height={24} />
+      <Logo height={36} />
     </div>
   );
 }
