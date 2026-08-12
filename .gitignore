@@ -41,3 +41,4 @@ data/ground_truth.csv
 *.swp
 .DS_Store
 Thumbs.db
+.vercel
