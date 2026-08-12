@@ -257,6 +257,19 @@ async def clear_notify_email(session: AsyncSession, document_id: uuid.UUID) -> b
     return True
 
 
+async def set_notify_email(
+    session: AsyncSession, document: Document, notify_email: str | None
+) -> Document:
+    """Correct the homeowner's reminder address after upload -- the inspector
+    typed it before the report existed, so this is the only way to fix a
+    typo or add/remove it after the fact.
+    """
+    document.notify_email = notify_email
+    await session.commit()
+    await session.refresh(document)
+    return document
+
+
 async def get_document_with_chunks(
     session: AsyncSession, document_id: uuid.UUID
 ) -> Document | None:

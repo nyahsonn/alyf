@@ -167,6 +167,85 @@ function EditableText({
   );
 }
 
+// Editable homeowner reminder email, shown in the inspector header. Same
+// click-to-edit shape as EditableText, but with its own empty state (no
+// email set yet) and email-format validation before it ever reaches the API.
+function NotifyEmailField({
+  value,
+  onSave,
+}: {
+  value: string | null;
+  onSave: (next: string | null) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+  const [saving, setSaving] = useState(false);
+  const [invalid, setInvalid] = useState(false);
+
+  if (!editing) {
+    return (
+      <p className="mt-2 text-xs text-ink-faint">
+        Reminder email:{" "}
+        <span className="font-medium text-ink-soft">{value ?? "not set"}</span>{" "}
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(value ?? "");
+            setInvalid(false);
+            setEditing(true);
+          }}
+          className="font-medium text-ink-faint underline underline-offset-2 hover:text-ink"
+        >
+          Edit
+        </button>
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <input
+        type="email"
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setInvalid(false);
+        }}
+        placeholder="homeowner@example.com"
+        className={`rounded-lg border bg-surface px-2.5 py-1 text-xs text-ink placeholder:text-ink-faint focus:outline-none ${
+          invalid ? "border-brick" : "border-line focus:border-accent"
+        }`}
+      />
+      <button
+        type="button"
+        disabled={saving}
+        onClick={async () => {
+          const next = draft.trim();
+          if (next && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next)) {
+            setInvalid(true);
+            return;
+          }
+          setSaving(true);
+          await onSave(next || null);
+          setSaving(false);
+          setEditing(false);
+        }}
+        className="text-xs font-medium text-accent underline underline-offset-2 disabled:opacity-50"
+      >
+        {saving ? "Saving…" : "Save"}
+      </button>
+      <button
+        type="button"
+        onClick={() => setEditing(false)}
+        className="text-xs font-medium text-ink-faint underline underline-offset-2"
+      >
+        Cancel
+      </button>
+      {invalid && <span className="w-full text-[11px] text-brick">Enter a valid email address.</span>}
+    </div>
+  );
+}
+
 function SystemsSection({
   systems,
   actionItems,
@@ -434,6 +513,14 @@ export default function ReportPage() {
     [params.id],
   );
 
+  const saveNotifyEmail = useCallback(
+    async (next: string | null) => {
+      const updated = await api.updateNotifyEmail(params.id, next);
+      setDocument(updated);
+    },
+    [params.id],
+  );
+
   const saveActionItem = useCallback(
     async (itemId: string, input: { urgency?: string; recommendation?: string }) => {
       const updated = await api.updateActionItem(params.id, itemId, input);
@@ -534,6 +621,7 @@ export default function ReportPage() {
           <StatusBadge status={status.status} />
         </div>
         <p className="mt-2 text-sm text-ink-soft">{doc.title}</p>
+        <NotifyEmailField value={doc.notify_email} onSave={saveNotifyEmail} />
         <p className="mt-4 text-xs text-ink-faint">{reportDisclaimer(inspectorName)}</p>
 
         <div className="mt-5 flex flex-wrap items-center gap-3">

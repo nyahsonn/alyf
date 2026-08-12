@@ -245,6 +245,12 @@ export const api = {
   unsubscribe: (documentId: string) =>
     request<void>(`/documents/${documentId}/notify-email`, { method: "DELETE" }),
 
+  updateNotifyEmail: (documentId: string, notifyEmail: string | null) =>
+    request<Document>(`/documents/${documentId}/notify-email`, {
+      method: "PATCH",
+      body: JSON.stringify({ notify_email: notifyEmail }),
+    }),
+
   extract: (documentId: string) =>
     request<ExtractionResult>(`/documents/${documentId}/extract`, {
       method: "POST",

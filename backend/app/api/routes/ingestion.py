@@ -10,7 +10,7 @@ from pydantic import EmailStr, TypeAdapter, ValidationError
 
 from app.api.deps import CurrentInspectorDep, OwnedDocumentDep, SessionDep
 from app.ingestion import service
-from app.ingestion.schemas import DocumentCreate, DocumentDetail, DocumentRead
+from app.ingestion.schemas import DocumentCreate, DocumentDetail, DocumentRead, NotifyEmailUpdate
 
 _email_adapter = TypeAdapter(EmailStr)
 
@@ -123,6 +123,19 @@ async def get_document(document: OwnedDocumentDep, session: SessionDep) -> Docum
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(document: OwnedDocumentDep, session: SessionDep) -> None:
     await service.delete_document(session, document.id)
+
+
+@router.patch("/{document_id}/notify-email", response_model=DocumentRead)
+async def update_notify_email(
+    document: OwnedDocumentDep, payload: NotifyEmailUpdate, session: SessionDep
+) -> DocumentRead:
+    """Inspector correction: the homeowner's email is typed once at upload
+    time, before the report exists, so this is the only way to fix a typo
+    or add/remove it afterwards. Owner-only, unlike the unsubscribe route
+    below -- this one's reached from the inspector's own report view.
+    """
+    document = await service.set_notify_email(session, document, payload.notify_email)
+    return DocumentRead.model_validate(document)
 
 
 @router.delete("/{document_id}/notify-email", status_code=status.HTTP_204_NO_CONTENT)

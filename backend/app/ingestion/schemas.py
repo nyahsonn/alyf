@@ -16,6 +16,10 @@ class DocumentCreate(BaseModel):
     notify_email: EmailStr | None = Field(default=None)
 
 
+class NotifyEmailUpdate(BaseModel):
+    notify_email: EmailStr | None = Field(default=None)
+
+
 class ChunkRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
