@@ -11,11 +11,10 @@ report doesn't sit auto-sendable for long before this actually runs.
 
     python scripts/auto_send_pending_reports.py [--dry-run]
 
-Requires a running Postgres (see docker-compose.yml). No email is sent by
-this script -- "auto_sent" only unlocks the report at its existing link
-(GET /documents/{id}/buyer-report); the weekly reminder job is what emails
-anything, and only once a report is approved or auto_sent (see
-app/notifications/service.py).
+Requires a running Postgres (see docker-compose.yml). Also notifies each
+report's buyer (if they opted in at upload) and inspector by email that it's
+now visible -- see app/notifications/service.py's send_report_ready_emails --
+unless --dry-run, in which case nothing is changed or sent.
 """
 
 import argparse
@@ -32,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.config import settings  # noqa: E402
 from app.core.database import SessionFactory, init_db  # noqa: E402
 from app.extraction.service import auto_send_stale_events  # noqa: E402
+from app.notifications.service import send_report_ready_emails  # noqa: E402
 
 
 async def main_async(dry_run: bool) -> int:
@@ -39,9 +39,13 @@ async def main_async(dry_run: bool) -> int:
     after = timedelta(hours=settings.auto_send_after_hours)
     async with SessionFactory() as session:
         moved = await auto_send_stale_events(session, after=after, dry_run=dry_run)
+        if not dry_run:
+            for event in moved:
+                await send_report_ready_emails(session, event.document_id, is_auto_sent=True)
 
     verb = "Would auto-send" if dry_run else "Auto-sent"
-    print(f"{verb} {moved} report{'s' if moved != 1 else ''} (window: {after}).")
+    count = len(moved)
+    print(f"{verb} {count} report{'s' if count != 1 else ''} (window: {after}).")
     return 0
 
 

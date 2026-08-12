@@ -24,6 +24,7 @@ from app.extraction.schemas import (
     HomeReportResult,
     HomeSystemRead,
 )
+from app.notifications import service as notifications_service
 
 logger = logging.getLogger(__name__)
 
@@ -187,12 +188,24 @@ async def approve(document: OwnedDocumentDep, session: SessionDep) -> EventStatu
     """Inspector sign-off: unlocks this report at its public link. Safe to
     call again later (e.g. after an auto-send already happened) -- it just
     records that a human has now also reviewed it."""
+    previous = await service.get_event_status(session, document.id)
+    was_pending = previous is not None and previous.status == "pending_review"
+
     event = await service.approve_event(session, document.id)
     if event is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=_NO_HOME_REPORT_DETAIL,
         )
+
+    if was_pending:
+        # Only on a genuine pending_review -> approved transition -- a
+        # redundant re-approve (e.g. after auto-send already fired) has
+        # already notified everyone once and shouldn't do it again.
+        await notifications_service.send_report_ready_emails(
+            session, document.id, is_auto_sent=False
+        )
+
     return EventStatusRead.model_validate(event)
 
 

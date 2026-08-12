@@ -8,6 +8,7 @@ notifications owns that table itself, so querying/writing it directly here
 is the same thing every other module does with its own tables.
 """
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -15,13 +16,16 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import service as auth_service
 from app.core.config import settings
 from app.extraction import service as extraction_service
 from app.extraction.models import ActionItem
 from app.ingestion import service as ingestion_service
 from app.ingestion.models import Document
-from app.notifications.emailer import send_email
+from app.notifications.emailer import EmailNotConfigured, send_email
 from app.notifications.models import ReminderLog
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_LABELS = {
     "roof": "Roof",
@@ -236,3 +240,98 @@ async def send_weekly_reminders(session: AsyncSession, *, dry_run: bool = False)
         sent += 1
 
     return sent
+
+
+def build_buyer_ready_email(
+    document: Document, inspector_name: str | None, *, is_auto_sent: bool
+) -> tuple[str, str]:
+    """The buyer's first notice that their report exists -- sent once, when
+    a report becomes visible (approved, or auto-sent past the review
+    window). Distinct from build_reminder_email above, which is the
+    recurring weekly nudge about outstanding next_90_days items.
+    """
+    subject = f"Your AI Home Health Report is ready — {document.title}"
+    report_url = f"{settings.frontend_base_url.rstrip('/')}/reports/{document.id}"
+
+    lines = [
+        "Hi,",
+        "",
+        f"Your AI Home Health Report for {document.title} is ready to view.",
+        "",
+        f"View your report: {report_url}",
+        "",
+    ]
+    if inspector_name:
+        lines.append(
+            f"Questions about the findings? Reach out to {inspector_name}, your inspector."
+        )
+        lines.append("")
+    if not is_auto_sent:
+        lines.append("This report has been reviewed and approved by your inspector.")
+        lines.append("")
+    lines.append("-- ALYF")
+
+    return subject, "\n".join(lines)
+
+
+def build_inspector_ready_email(document: Document, *, is_auto_sent: bool) -> tuple[str, str]:
+    """Confirmation to the inspector that a report they own just became
+    visible to its buyer -- either because they approved it, or because the
+    auto-send window elapsed before they got to it.
+    """
+    report_url = f"{settings.frontend_base_url.rstrip('/')}/reports/{document.id}"
+
+    if is_auto_sent:
+        subject = f"Auto-sent: {document.title}"
+        body_lines = [
+            f"Your report for {document.title} wasn't reviewed within the review window, "
+            "so it auto-sent to the buyer to keep delivery on track.",
+            "",
+            "You can still edit it any time -- editing resets it to pending review until "
+            "you approve it again.",
+        ]
+    else:
+        subject = f"Approved: {document.title}"
+        body_lines = [
+            f"Your report for {document.title} is approved and now visible to your buyer."
+        ]
+
+    lines = ["Hi,", "", *body_lines, "", f"View it: {report_url}", "", "-- ALYF"]
+    return subject, "\n".join(lines)
+
+
+async def send_report_ready_emails(
+    session: AsyncSession, document_id: uuid.UUID, *, is_auto_sent: bool
+) -> None:
+    """Notify the buyer (if they opted in at upload, via notify_email) and
+    the inspector (if the document has one on record) that a report just
+        became visible. Called from both the manual /approve route and the
+    auto-send script, right after each successfully flips a report's status.
+
+    Never lets an email problem (no RESEND_API_KEY, a Resend API error)
+    fail the caller -- approving or auto-sending a report must still
+    succeed even if notifying about it doesn't; this only logs a warning.
+    """
+    document = await ingestion_service.get_document(session, document_id)
+    if document is None:
+        return
+
+    inspector = None
+    if document.inspector_id is not None:
+        inspector = await auth_service.get_inspector(session, document.inspector_id)
+
+    try:
+        if document.notify_email:
+            subject, body = build_buyer_ready_email(
+                document, inspector.name if inspector else None, is_auto_sent=is_auto_sent
+            )
+            send_email(document.notify_email, subject, body)
+        if inspector is not None:
+            subject, body = build_inspector_ready_email(document, is_auto_sent=is_auto_sent)
+            send_email(inspector.email, subject, body)
+    except EmailNotConfigured:
+        logger.warning(
+            "Report-ready email not sent for document %s: RESEND_API_KEY not set", document_id
+        )
+    except Exception:
+        logger.exception("Report-ready email failed for document %s", document_id)

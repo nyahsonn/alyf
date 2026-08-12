@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta
 from app.extraction.models import ActionItem
 from app.ingestion.models import Document
 from app.notifications.service import (
+    build_buyer_ready_email,
+    build_inspector_ready_email,
     build_reminder_email,
     days_until_due,
     is_safety_hazard,
@@ -144,6 +146,36 @@ def test_reminder_email_notes_overdue_items_as_overdue():
     item = _item("hvac", "Something overdue.", created_at=NOW - timedelta(days=100))
     _, body = build_reminder_email(document, [item], as_of=NOW)
     assert "overdue by 10 day" in body
+
+
+def test_buyer_ready_email_links_to_the_report_and_names_the_inspector():
+    document = _document()
+    _, body = build_buyer_ready_email(document, "Nico Amah", is_auto_sent=False)
+    assert f"/reports/{document.id}" in body
+    assert "Nico Amah" in body
+    assert "reviewed and approved" in body
+
+
+def test_buyer_ready_email_omits_the_approved_line_when_auto_sent():
+    document = _document()
+    _, body = build_buyer_ready_email(document, None, is_auto_sent=True)
+    assert "reviewed and approved" not in body
+
+
+def test_buyer_ready_email_has_no_inspector_line_when_name_is_unknown():
+    document = _document()
+    _, body = build_buyer_ready_email(document, None, is_auto_sent=False)
+    assert "Reach out to" not in body
+
+
+def test_inspector_ready_email_distinguishes_approved_from_auto_sent():
+    document = _document()
+    subject_approved, body_approved = build_inspector_ready_email(document, is_auto_sent=False)
+    subject_auto, body_auto = build_inspector_ready_email(document, is_auto_sent=True)
+    assert "Approved" in subject_approved
+    assert "approved and now visible" in body_approved
+    assert "Auto-sent" in subject_auto
+    assert "wasn't reviewed within the review window" in body_auto
 
 
 def test_reminder_email_includes_a_cost_disclaimer():

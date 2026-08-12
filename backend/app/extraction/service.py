@@ -518,15 +518,16 @@ async def approve_event(session: AsyncSession, document_id: uuid.UUID) -> Inspec
 
 async def auto_send_stale_events(
     session: AsyncSession, *, after: timedelta, dry_run: bool = False
-) -> int:
+) -> list[InspectionEvent]:
     """Move every report still pending_review past the auto-send window to
     auto_sent, so a slow inspector doesn't block delivery to the buyer.
 
     Anchored on InspectionEvent.created_at -- there is no separate "review
     started" timestamp, and created_at is set the moment the event (and so
     the pending_review state) begins, right after the home report is
-    generated. Returns the count that were (or, in dry-run mode, would be)
-    moved.
+    generated. Returns the events that were (or, in dry-run mode, would be)
+    moved -- the caller (scripts/auto_send_pending_reports.py) uses these to
+    notify each report's buyer/inspector that it's now visible.
     """
     cutoff = datetime.now(UTC) - after
     stale = list(
@@ -543,7 +544,22 @@ async def auto_send_stale_events(
             event.status = "auto_sent"
             event.reviewed_at = now
         await session.commit()
-    return len(stale)
+    return stale
+
+
+async def _unapprove_if_needed(session: AsyncSession, document_id: uuid.UUID) -> None:
+    """Editing content on an already-approved/auto-sent report means a buyer
+    could be looking at an "approved" badge over wording that changed after
+    the fact. Reset to pending_review on any edit -- same treatment
+    create_action_plan already gives a full regeneration -- rather than
+    disabling editing outright once approved: the inspector can still fix a
+    typo any time, they just have to approve it again before it's back in
+    front of the buyer. Left uncommitted; the caller's own commit covers it.
+    """
+    event = await _get_event(session, document_id)
+    if event is not None and event.status in _VISIBLE_STATUSES:
+        event.status = "pending_review"
+        event.reviewed_at = None
 
 
 async def update_finding(
@@ -561,6 +577,7 @@ async def update_finding(
     if finding is None:
         return None
     finding.text = text
+    await _unapprove_if_needed(session, document_id)
     await session.commit()
     await session.refresh(finding)
     return finding
@@ -587,6 +604,7 @@ async def update_action_item(
         item.urgency = urgency
     if recommendation is not None:
         item.recommendation = recommendation
+    await _unapprove_if_needed(session, document_id)
     await session.commit()
     await session.refresh(item)
     return item
