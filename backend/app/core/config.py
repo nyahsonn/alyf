@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     docai_location: str = "us"
     docai_processor_id: str = ""
 
+    # Alternative to a real GOOGLE_APPLICATION_CREDENTIALS file on disk, for
+    # platforms that only offer environment variables (e.g. Railway) --
+    # the service account key's JSON content, written to the path
+    # GOOGLE_APPLICATION_CREDENTIALS points at on startup (see main.py's
+    # lifespan). Blank locally, where a real key file + a real
+    # GOOGLE_APPLICATION_CREDENTIALS env var already work as documented above.
+    google_credentials_json: str = ""
+
     # Cloud Storage bucket used as scratch space for PDFs over ONLINE_PAGE_LIMIT
     # pages, which go through Document AI's batch API instead (see ocr.py,
     # _process_batch). Only needed for those; left blank, batch requests fail

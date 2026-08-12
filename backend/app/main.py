@@ -5,8 +5,10 @@ Interactive docs:  http://localhost:8000/docs
 """
 
 import logging
-from contextlib import asynccontextmanager
+import os
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import sentry_sdk
 from fastapi import FastAPI
@@ -33,9 +35,28 @@ if settings.sentry_dsn:
     sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.environment)
 
 
+def _write_google_credentials_file() -> None:
+    """Write GOOGLE_CREDENTIALS_JSON out to the path GOOGLE_APPLICATION_CREDENTIALS
+    points at, for platforms (Railway) that only offer environment variables,
+    not a real file on disk, for the service account key. A no-op if either is
+    unset -- local dev, and any deployment that already has a real key file
+    mounted, are untouched. Runs on every startup, since platforms like Railway
+    give each deploy/restart a fresh, empty filesystem -- a file written by a
+    one-off manual step would silently disappear on the next restart.
+    """
+    if not settings.google_credentials_json:
+        return
+    path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if not path:
+        return
+    Path(path).write_text(settings.google_credentials_json)
+    logger.info("Wrote Google service account credentials to %s", path)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Set up the schema on startup, close the connection pool on shutdown."""
+    _write_google_credentials_file()
     try:
         await init_db()
         logger.info("Database ready (pgvector enabled, tables created if missing).")
