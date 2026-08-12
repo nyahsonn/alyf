@@ -235,7 +235,20 @@ async def send_weekly_reminders(session: AsyncSession, *, dry_run: bool = False)
             print(body)
             print()
         else:
-            send_email(document.notify_email, subject, body)
+            try:
+                send_email(document.notify_email, subject, body)
+            except EmailNotConfigured:
+                # Every document would fail identically -- no point looping
+                # through the rest, let the script's own top-level handler
+                # print its one clear message and exit.
+                raise
+            except Exception:
+                # One recipient's email being rejected (bad address, a
+                # provider-side restriction) shouldn't stop reminders going
+                # out to everyone else due today. Not recorded as sent, so
+                # it's retried on the next run rather than silently dropped.
+                logger.exception("Weekly reminder email failed for document %s", document.id)
+                continue
             await _record_sent(session, document.id, as_of)
         sent += 1
 
