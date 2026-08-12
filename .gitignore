@@ -1,6 +1,7 @@
 # Environment files -- copy the .example files instead
 .env
 .env.local
+.env.sandbox
 *.env.local
 !.env.example
 !.env.local.example
