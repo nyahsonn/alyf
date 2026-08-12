@@ -25,8 +25,19 @@ import {
   isSafetyHazard,
   reportDisclaimer,
 } from "@/lib/format";
+import { LogoSymbol } from "@/components/Logo";
 
 type ViewSystem = BuyerReportSystem;
+
+// Small, unobtrusive brand mark in the corner -- present on every state of
+// this page (loading/error/pending/ready).
+function CornerMark() {
+  return (
+    <div className="absolute top-6 right-6 sm:top-8 sm:right-8">
+      <LogoSymbol height={24} />
+    </div>
+  );
+}
 
 function nextRecommendedAction(system: ViewSystem, items: ActionItem[]): ActionItem | null {
   const matches = items.filter((item) => item.system === system.name);
@@ -114,7 +125,8 @@ function TimelineBody({
     });
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-6 py-14">
+    <main className="relative mx-auto w-full max-w-3xl px-6 py-14">
+      <CornerMark />
       <Link
         href={backHref}
         className="text-xs font-medium text-ink-faint underline underline-offset-2 hover:text-ink"
@@ -265,7 +277,8 @@ export default function TimelinePage() {
 
   if (mode === "loading") {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+      <main className="relative mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+        <CornerMark />
         <p className="text-sm text-ink-soft">Loading your timeline…</p>
       </main>
     );
@@ -273,7 +286,8 @@ export default function TimelinePage() {
 
   if (mode === "error") {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+      <main className="relative mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+        <CornerMark />
         <p className="text-sm text-brick">{error}</p>
         <Link href="/upload" className="mt-4 text-sm font-medium text-accent underline underline-offset-2">
           Upload another report
@@ -287,7 +301,8 @@ export default function TimelinePage() {
 
     if (report.status === "pending_review") {
       return (
-        <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+        <main className="relative mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+          <CornerMark />
           <h1 className="font-display text-2xl font-medium tracking-tight">Almost ready</h1>
           <p className="mt-3 text-sm text-ink-soft">
             Your inspector is still reviewing this report. Check back soon — you&apos;ll see the

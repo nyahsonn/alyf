@@ -27,6 +27,19 @@ import {
   isSafetyHazard,
   reportDisclaimer,
 } from "@/lib/format";
+import { LogoSymbol } from "@/components/Logo";
+
+// Small, unobtrusive brand mark in the corner -- present on every state of
+// this page (loading/error/pending/ready), not just the full report, since
+// it's cheap to place once via absolute positioning rather than threading
+// it through each state's own layout.
+function CornerMark() {
+  return (
+    <div className="absolute top-6 right-6 sm:top-8 sm:right-8">
+      <LogoSymbol height={24} />
+    </div>
+  );
+}
 
 // A system as either mode's payload shapes it -- BuyerReportSystem's fields
 // plus HomeSystem's extra `finding_ids`, needed only in inspector mode to
@@ -434,7 +447,8 @@ export default function ReportPage() {
 
   if (mode === "loading") {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+      <main className="relative mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+        <CornerMark />
         <p className="text-sm text-ink-soft">Loading your report…</p>
       </main>
     );
@@ -442,7 +456,8 @@ export default function ReportPage() {
 
   if (mode === "error") {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+      <main className="relative mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+        <CornerMark />
         <p className="text-sm text-brick">{error}</p>
         <Link
           href="/upload"
@@ -459,7 +474,8 @@ export default function ReportPage() {
 
     if (report.status === "pending_review") {
       return (
-        <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+        <main className="relative mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+          <CornerMark />
           <h1 className="font-display text-2xl font-medium tracking-tight">Almost ready</h1>
           <p className="mt-3 text-sm text-ink-soft">
             Your inspector is still reviewing this report. Check back soon — you&apos;ll see your
@@ -470,7 +486,8 @@ export default function ReportPage() {
     }
 
     return (
-      <main className="mx-auto w-full max-w-3xl px-6 py-14">
+      <main className="relative mx-auto w-full max-w-3xl px-6 py-14">
+        <CornerMark />
         <header className="mb-12">
           <h1 className="font-display text-3xl font-medium tracking-tight">
             AI Home Health Report
@@ -499,7 +516,8 @@ export default function ReportPage() {
   const status = eventStatus as EventStatus;
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-6 py-14">
+    <main className="relative mx-auto w-full max-w-3xl px-6 py-14">
+      <CornerMark />
       <Link
         href="/upload"
         className="text-xs font-medium text-ink-faint underline underline-offset-2 hover:text-ink"
